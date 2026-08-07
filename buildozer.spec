@@ -5,10 +5,10 @@ package.domain = org.test
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf,otf
 version = 0.3
-requirements = python3,kivy,pyjnius,plyer
+requirements = python3,kivy==2.2.1,pyjnius,plyer,requests
 orientation = portrait
 fullscreen = 0
-android.permissions = INTERNET, RECORD_AUDIO
+android.permissions = INTERNET, RECORD_AUDIO, MODIFY_AUDIO_SETTINGS
 android.api = 33
 android.minapi = 21
 android.ndk = 25b
