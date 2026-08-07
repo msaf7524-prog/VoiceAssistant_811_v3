@@ -1,136 +1,83 @@
 from kivy.app import App
-from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
 from kivy.utils import platform
 
+from ai_client import OpenAIClient
 
 class VoiceAssistantApp(App):
     def build(self):
-        self.root_layout = BoxLayout(
-            orientation="vertical",
-            padding=24,
-            spacing=16
-        )
+        self.ai_client = OpenAIClient()
+        
+        layout = BoxLayout(orientation='vertical', padding=20, spacing=10)
 
         self.title_label = Label(
-            text="Voice Assistant 811\nStatus: Phase 3 Ready",
-            halign="center",
-            valign="middle",
-            font_size="24sp"
+            text="Voice Assistant 811\nStatus: Phase 4A Ready",
+            font_size='20sp',
+            halign='center'
         )
-        self.title_label.bind(size=self._update_text_size)
+        layout.add_widget(self.title_label)
 
         self.status_label = Label(
-            text="Microphone permission not checked yet.",
-            halign="center",
-            valign="middle",
-            font_size="18sp"
-        )
-        self.status_label.bind(size=self._update_text_size)
-
-        self.permission_button = Button(
-            text="Request Mic Permission",
+            text="أدخل API Key واضغط اختبار الاتصال",
+            font_size='14sp',
+            halign='center',
             size_hint_y=None,
-            height="56dp",
-            font_size="20sp"
+            height=120
         )
-        self.permission_button.bind(on_press=self.request_mic_permission)
+        layout.add_widget(self.status_label)
 
-        self.test_button = Button(
-            text="Test Android & Mic Setup",
+        self.api_input = TextInput(
+            hint_text="Paste OpenAI API Key here...",
+            multiline=False,
+            password=True,
             size_hint_y=None,
-            height="56dp",
-            font_size="20sp"
+            height=50
         )
-        self.test_button.bind(on_press=self.test_environment)
+        layout.add_widget(self.api_input)
 
-        self.root_layout.add_widget(self.title_label)
-        self.root_layout.add_widget(self.status_label)
-        self.root_layout.add_widget(self.permission_button)
-        self.root_layout.add_widget(self.test_button)
+        btn_test_ai = Button(
+            text="اختبار الاتصال بالذكاء الاصطناعي (Test AI)",
+            size_hint_y=None,
+            height=50
+        )
+        btn_test_ai.bind(on_press=self.test_ai)
+        layout.add_widget(btn_test_ai)
 
-        Clock.schedule_once(self.auto_setup, 0.5)
-        return self.root_layout
+        btn_mic = Button(
+            text="فحص إذن الميكروفون (Mic Check)",
+            size_hint_y=None,
+            height=50
+        )
+        btn_mic.bind(on_press=self.check_mic_permission)
+        layout.add_widget(btn_mic)
 
-    def _update_text_size(self, instance, value):
-        instance.text_size = value
+        return layout
 
-    def auto_setup(self, dt):
-        self.test_environment(None)
-
-    def request_mic_permission(self, instance):
-        if platform != "android":
+    def check_mic_permission(self, instance):
+        if platform == 'android':
+            from android.permissions import request_permissions, Permission, check_permission
+            if check_permission(Permission.RECORD_AUDIO):
+                self.status_label.text = "Microphone permission already granted."
+            else:
+                request_permissions([Permission.RECORD_AUDIO])
+                self.status_label.text = "Requesting microphone permission..."
+        else:
             self.status_label.text = "Not running on Android."
+
+    def test_ai(self, instance):
+        key = self.api_input.text.strip()
+        if not key:
+            self.status_label.text = "الرجاء إدخال API Key أولاً!"
             return
 
-        try:
-            from android.permissions import request_permissions, Permission, check_permission
-            already_granted = check_permission(Permission.RECORD_AUDIO)
-            if already_granted:
-                self.status_label.text = "Microphone permission already granted."
-                return
+        self.status_label.text = "جاري الاتصال بـ OpenAI..."
+        self.ai_client.set_api_key(key)
+        
+        result = self.ai_client.ask("قل فقط: Voice Assistant 811 متصل بنجاح.")
+        self.status_label.text = f"النتيجة:\n{result}"
 
-            request_permissions([Permission.RECORD_AUDIO], self.on_permissions_result)
-            self.status_label.text = "Requesting microphone permission..."
-        except Exception as e:
-            self.status_label.text = f"Permission request error: {e}"
-
-    def on_permissions_result(self, permissions, grants):
-        try:
-            granted = True
-            for g in grants:
-                if not g:
-                    granted = False
-                    break
-
-            if granted:
-                self.status_label.text = "Microphone permission granted."
-            else:
-                self.status_label.text = "Microphone permission denied."
-        except Exception as e:
-            self.status_label.text = f"Permission callback error: {e}"
-
-    def test_environment(self, instance):
-        lines = []
-        if platform == "android":
-            lines.append("Platform: Android")
-            try:
-                from jnius import autoclass
-                Build = autoclass("android.os.Build")
-                Version = autoclass("android.os.Build$VERSION")
-
-                manufacturer = str(Build.MANUFACTURER)
-                model = str(Build.MODEL)
-                sdk_int = int(Version.SDK_INT)
-
-                lines.append(f"Device: {manufacturer} {model}")
-                lines.append(f"Android API: {sdk_int}")
-                lines.append("pyjnius: OK")
-            except Exception as e:
-                lines.append(f"pyjnius error: {e}")
-
-            try:
-                from plyer import storagepath
-                documents_dir = storagepath.get_documents_dir()
-                lines.append(f"Documents Dir: {documents_dir}")
-                lines.append("plyer: OK")
-            except Exception as e:
-                lines.append(f"plyer error: {e}")
-
-            try:
-                from android.permissions import check_permission, Permission
-                mic_ok = check_permission(Permission.RECORD_AUDIO)
-                lines.append(f"RECORD_AUDIO permission: {'GRANTED' if mic_ok else 'NOT GRANTED'}")
-            except Exception as e:
-                lines.append(f"android.permissions error: {e}")
-        else:
-            lines.append(f"Platform: {platform}")
-            lines.append("Run this APK on Android to test permissions and mic setup.")
-
-        self.status_label.text = "\n".join(lines)
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     VoiceAssistantApp().run()
