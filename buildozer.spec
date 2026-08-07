@@ -5,7 +5,7 @@ package.domain = org.test
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf,otf
 version = 0.3
-requirements = python3,kivy==2.2.1,pyjnius,plyer,requests
+requirements = python3,kivy,pyjnius,plyer,openssl,requests,certifi,urllib3
 orientation = portrait
 fullscreen = 0
 android.permissions = INTERNET, RECORD_AUDIO, MODIFY_AUDIO_SETTINGS
