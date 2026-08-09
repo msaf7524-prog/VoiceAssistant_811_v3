@@ -1,178 +1,160 @@
 import os
 from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.core.text import LabelBase
-from kivy.metrics import dp
 from kivy.clock import Clock
-
-import arabic_reshaper
-from bidi.algorithm import get_display
+from kivy.metrics import dp
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+from kivy.utils import platform
 
 from ai_client import OpenAIClient
 
-# =========================================================
-# ARABIC FONT REGISTRATION
-# =========================================================
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ARABIC_FONT = os.path.join(BASE_DIR, "Cairo-Regular.ttf")
-
-if os.path.exists(ARABIC_FONT):
-    LabelBase.register(name="Cairo", fn_regular=ARABIC_FONT)
-else:
-    ARABIC_FONT = None
-
-
-# =========================================================
-# ARABIC / RTL HELPER
-# =========================================================
-
-def rtl_text(text):
-    """
-    تجهيز النص العربي:
-    1- Arabic reshaping
-    2- Bidirectional RTL ordering
-    """
-    if not text:
-        return ""
-    text = str(text)
-    try:
-        reshaped = arabic_reshaper.reshape(text)
-        return get_display(reshaped)
-    except Exception:
-        return text
-
-
-# =========================================================
-# FONT & WIDGET HELPERS
-# =========================================================
-
-def make_label(text="", font_size=22, **kwargs):
-    kwargs.setdefault("halign", "center")
-    kwargs.setdefault("valign", "middle")
-    
-    label = Label(
-        text=rtl_text(text),
-        font_size=font_size,
-        **kwargs
-    )
-    if ARABIC_FONT:
-        label.font_name = "Cairo"
-    return label
-
-
-def make_button(text="", **kwargs):
-    button = Button(
-        text=rtl_text(text),
-        **kwargs
-    )
-    if ARABIC_FONT:
-        button.font_name = "Cairo"
-    return button
-
-
-# =========================================================
-# MAIN SCREEN
-# =========================================================
 
 class VoiceAssistant811(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(
-            orientation="vertical",
-            spacing=dp(15),
-            padding=dp(16),
-            **kwargs
-        )
-        
+        super().__init__(**kwargs)
+        self.orientation = "vertical"
+        self.spacing = dp(14)
+        self.padding = dp(16)
+
         self.ai_client = OpenAIClient()
-        
-        # -------------------------------------------------
-        # TITLE
-        # -------------------------------------------------
-        title = make_label(
-            "Voice Assistant 811",
-            font_size=30,
-            size_hint_y=None,
-            height=dp(80)
-        )
-        self.add_widget(title)
-        
-        # -------------------------------------------------
-        # STATUS
-        # -------------------------------------------------
-        self.status = make_label(
-            "جاهز – Phase 4",
-            font_size=23
-        )
-        self.add_widget(self.status)
-        
-        # -------------------------------------------------
-        # INFORMATION
-        # -------------------------------------------------
-        self.info = make_label(
-            "منظومة المساعد الصوتي\nAndroid Bridge: OK\npyjnius: OK\nMicrophone: OK\nArabic RTL: Enabled",
-            font_size=20
-        )
-        self.add_widget(self.info)
-        
-        # -------------------------------------------------
-        # TEST BUTTON
-        # -------------------------------------------------
-        self.test_button = make_button(
-            "اختبار النظام",
-            font_size=22,
-            size_hint_y=None,
-            height=dp(75)
-        )
-        self.test_button.bind(on_press=self.test_system)
-        self.add_widget(self.test_button)
-        
-        # -------------------------------------------------
-        # AI TEST BUTTON
-        # -------------------------------------------------
-        self.ai_button = make_button(
-            "اختبار اتصال الذكاء الاصطناعي",
-            font_size=21,
-            size_hint_y=None,
-            height=dp(75)
-        )
-        self.ai_button.bind(on_press=self.test_ai)
-        self.add_widget(self.ai_button)
 
-    # -------------------------------------------------
-    # SYSTEM TEST
-    # -------------------------------------------------
-    def test_system(self, instance):
-        self.status.text = rtl_text("تم تشغيل النظام بنجاح")
-        self.info.text = rtl_text(
-            "Android Bridge: OK\npyjnius: OK\nMicrophone: OK\nArabic RTL: OK"
+        self.title_label = Label(
+            text="Voice Assistant 811\nPhase 4A Ready",
+            font_size="26sp",
+            halign="center",
+            valign="middle",
+            size_hint_y=None,
+            height=dp(95)
+        )
+        self.title_label.bind(size=self._sync_text_size)
+
+        self.status_label = Label(
+            text="Ready",
+            font_size="20sp",
+            halign="center",
+            valign="middle",
+            size_hint_y=None,
+            height=dp(90)
+        )
+        self.status_label.bind(size=self._sync_text_size)
+
+        self.info_label = Label(
+            text="Android Bridge: OK\nMicrophone: OK\nOpenAI: not tested yet",
+            font_size="18sp",
+            halign="center",
+            valign="middle"
+        )
+        self.info_label.bind(size=self._sync_text_size)
+
+        self.api_key_input = TextInput(
+            hint_text="Paste OpenAI API Key here...",
+            multiline=False,
+            password=True,
+            font_size="18sp",
+            size_hint_y=None,
+            height=dp(52),
+            write_tab=False
         )
 
-    # -------------------------------------------------
-    # AI TEST
-    # -------------------------------------------------
+        self.test_ai_button = Button(
+            text="Test AI",
+            font_size="20sp",
+            size_hint_y=None,
+            height=dp(56)
+        )
+        self.test_ai_button.bind(on_press=self.test_ai)
+
+        self.mic_check_button = Button(
+            text="Mic Check",
+            font_size="20sp",
+            size_hint_y=None,
+            height=dp(56)
+        )
+        self.mic_check_button.bind(on_press=self.check_mic)
+
+        self.add_widget(self.title_label)
+        self.add_widget(self.status_label)
+        self.add_widget(self.info_label)
+        self.add_widget(self.api_key_input)
+        self.add_widget(self.test_ai_button)
+        self.add_widget(self.mic_check_button)
+
+        Clock.schedule_once(self._startup_check, 0.3)
+
+    def _sync_text_size(self, instance, value):
+        instance.text_size = (value[0], None)
+
+    def _startup_check(self, dt):
+        lines = []
+        if platform == "android":
+            lines.append("Platform: Android")
+            try:
+                from jnius import autoclass
+                Build = autoclass("android.os.Build")
+                Version = autoclass("android.os.Build$VERSION")
+                lines.append(f"Device: {Build.MANUFACTURER} {Build.MODEL}")
+                lines.append(f"Android API: {int(Version.SDK_INT)}")
+            except Exception as e:
+                lines.append(f"pyjnius error: {e}")
+
+            try:
+                from android.permissions import Permission, check_permission
+                mic_ok = check_permission(Permission.RECORD_AUDIO)
+                lines.append(f"RECORD_AUDIO: {'GRANTED' if mic_ok else 'NOT GRANTED'}")
+            except Exception:
+                lines.append("RECORD_AUDIO: unavailable")
+        else:
+            lines.append(f"Platform: {platform}")
+
+        self.info_label.text = "\n".join(lines)
+        self.status_label.text = "Phase 4A ready"
+
+    def check_mic(self, instance):
+        self.status_label.text = "Checking microphone..."
+        Clock.schedule_once(self._do_mic_check, 0.15)
+
+    def _do_mic_check(self, dt):
+        if platform != "android":
+            self.status_label.text = "Mic check is for Android only"
+            return
+
+        try:
+            from android.permissions import Permission, check_permission
+            if check_permission(Permission.RECORD_AUDIO):
+                self.status_label.text = "Microphone permission granted"
+            else:
+                self.status_label.text = "Microphone permission NOT granted"
+        except Exception as e:
+            self.status_label.text = f"Mic check error: {e}"
+
     def test_ai(self, instance):
-        self.status.text = rtl_text("جاري الاتصال بالذكاء الاصطناعي...")
-        self.ai_button.disabled = True
+        api_key = self.api_key_input.text.strip()
+        self.ai_client.set_api_key(api_key)
+
+        if not self.ai_client.is_ready():
+            self.status_label.text = "Please paste an OpenAI API key"
+            return
+
+        self.status_label.text = "Sending request to OpenAI..."
+        self.test_ai_button.disabled = True
+        self.mic_check_button.disabled = True
+
         Clock.schedule_once(self._run_ai_test, 0.2)
 
     def _run_ai_test(self, dt):
         try:
-            result = self.ai_client.ask("قل بالعربية: تم الاتصال بنجاح.")
-            self.status.text = rtl_text("نتيجة الذكاء الاصطناعي:")
-            self.info.text = rtl_text(result)
+            result = self.ai_client.ask("Reply with a short confirmation that the connection works.")
+            self.status_label.text = "AI test completed"
+            self.info_label.text = result
         except Exception as e:
-            self.status.text = rtl_text("حدث خطأ")
-            self.info.text = rtl_text(str(e))
+            self.status_label.text = "AI test failed"
+            self.info_label.text = str(e)
         finally:
-            self.ai_button.disabled = False
+            self.test_ai_button.disabled = False
+            self.mic_check_button.disabled = False
 
-
-# =========================================================
-# APP APPLICATION
-# =========================================================
 
 class VoiceAssistantApp(App):
     def build(self):
