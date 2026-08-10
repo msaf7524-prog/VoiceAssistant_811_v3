@@ -134,7 +134,7 @@ class VoiceAssistant811(BoxLayout):
             try:
                 from jnius import autoclass
                 TextToSpeech = autoclass('android.speech.tts.TextToSpeech')
-                self.tts_engine.speak(text, TextToSpeech.QUEUE_FLUSH, None, None)
+                self.tts_engine.speak(text, TextToSpeech.QUEUE_FLUSH, None)
             except Exception as e:
                 self.info_label.text = f"Speak error: {e}"
 
