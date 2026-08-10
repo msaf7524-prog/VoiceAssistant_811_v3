@@ -21,8 +21,8 @@ class VoiceAssistant811(BoxLayout):
         self.ai_client = OpenAIClient()
 
         self.title_label = Label(
-            text="Voice Assistant 811\nPhase 4A Ready",
-            font_size="26sp",
+            text="Voice Assistant 811\nPhase 4B - Audio Integration",
+            font_size="22sp",
             halign="center",
             valign="middle",
             size_hint_y=None,
@@ -31,129 +31,99 @@ class VoiceAssistant811(BoxLayout):
         self.title_label.bind(size=self._sync_text_size)
 
         self.status_label = Label(
-            text="Ready",
-            font_size="20sp",
+            text="Initializing...",
+            font_size="18sp",
             halign="center",
             valign="middle",
             size_hint_y=None,
-            height=dp(90)
+            height=dp(80)
         )
         self.status_label.bind(size=self._sync_text_size)
 
         self.info_label = Label(
-            text="Android Bridge: OK\nMicrophone: OK\nOpenAI: not tested yet",
-            font_size="18sp",
+            text="Requesting permissions...",
+            font_size="16sp",
             halign="center",
             valign="middle"
         )
         self.info_label.bind(size=self._sync_text_size)
 
         self.api_key_input = TextInput(
-            hint_text="Paste OpenAI API Key here...",
+            hint_text="Paste API Key here...",
             multiline=False,
             password=True,
-            font_size="18sp",
+            font_size="16sp",
             size_hint_y=None,
-            height=dp(52),
+            height=dp(50),
             write_tab=False
         )
 
         self.test_ai_button = Button(
-            text="Test AI",
-            font_size="20sp",
+            text="Test AI Connection",
+            font_size="18sp",
             size_hint_y=None,
-            height=dp(56)
+            height=dp(52)
         )
         self.test_ai_button.bind(on_press=self.test_ai)
-
-        self.mic_check_button = Button(
-            text="Mic Check",
-            font_size="20sp",
-            size_hint_y=None,
-            height=dp(56)
-        )
-        self.mic_check_button.bind(on_press=self.check_mic)
 
         self.add_widget(self.title_label)
         self.add_widget(self.status_label)
         self.add_widget(self.info_label)
         self.add_widget(self.api_key_input)
         self.add_widget(self.test_ai_button)
-        self.add_widget(self.mic_check_button)
 
-        Clock.schedule_once(self._startup_check, 0.3)
+        Clock.schedule_once(self._request_android_permissions, 0.5)
 
     def _sync_text_size(self, instance, value):
         instance.text_size = (value[0], None)
 
-    def _startup_check(self, dt):
-        lines = []
+    def _request_android_permissions(self, dt):
         if platform == "android":
-            lines.append("Platform: Android")
             try:
-                from jnius import autoclass
-                Build = autoclass("android.os.Build")
-                Version = autoclass("android.os.Build$VERSION")
-                lines.append(f"Device: {Build.MANUFACTURER} {Build.MODEL}")
-                lines.append(f"Android API: {int(Version.SDK_INT)}")
+                from android.permissions import Permission, request_permissions, check_permission
+                
+                def permission_callback(permissions, results):
+                    if all(results):
+                        self.status_label.text = "Microphone: GRANTED"
+                        self.info_label.text = "Ready to record audio"
+                    else:
+                        self.status_label.text = "Microphone: DENIED"
+                        self.info_label.text = "Permission is required for voice commands"
+
+                if not check_permission(Permission.RECORD_AUDIO):
+                    request_permissions([Permission.RECORD_AUDIO], permission_callback)
+                else:
+                    self.status_label.text = "Microphone: GRANTED"
+                    self.info_label.text = "System fully operational"
             except Exception as e:
-                lines.append(f"pyjnius error: {e}")
-
-            try:
-                from android.permissions import Permission, check_permission
-                mic_ok = check_permission(Permission.RECORD_AUDIO)
-                lines.append(f"RECORD_AUDIO: {'GRANTED' if mic_ok else 'NOT GRANTED'}")
-            except Exception:
-                lines.append("RECORD_AUDIO: unavailable")
+                self.status_label.text = "Permission System Error"
+                self.info_label.text = str(e)
         else:
-            lines.append(f"Platform: {platform}")
-
-        self.info_label.text = "\n".join(lines)
-        self.status_label.text = "Phase 4A ready"
-
-    def check_mic(self, instance):
-        self.status_label.text = "Checking microphone..."
-        Clock.schedule_once(self._do_mic_check, 0.15)
-
-    def _do_mic_check(self, dt):
-        if platform != "android":
-            self.status_label.text = "Mic check is for Android only"
-            return
-
-        try:
-            from android.permissions import Permission, check_permission
-            if check_permission(Permission.RECORD_AUDIO):
-                self.status_label.text = "Microphone permission granted"
-            else:
-                self.status_label.text = "Microphone permission NOT granted"
-        except Exception as e:
-            self.status_label.text = f"Mic check error: {e}"
+            self.status_label.text = "Desktop / Non-Android Platform"
 
     def test_ai(self, instance):
         api_key = self.api_key_input.text.strip()
         self.ai_client.set_api_key(api_key)
 
         if not self.ai_client.is_ready():
-            self.status_label.text = "Please paste an OpenAI API key"
+            self.status_label.text = "Please paste an API key"
             return
 
-        self.status_label.text = "Sending request to OpenAI..."
+        self.status_label.text = "Sending request to AI..."
         self.test_ai_button.disabled = True
-        self.mic_check_button.disabled = True
 
         Clock.schedule_once(self._run_ai_test, 0.2)
 
     def _run_ai_test(self, dt):
         try:
-            result = self.ai_client.ask("Reply with a short confirmation that the connection works.")
-            self.status_label.text = "AI test completed"
+            result = self.ai_client.ask("Reply with 'Voice Assistant 811 connected successfully.'")
+            self.status_label.text = "AI Response Received"
             self.info_label.text = result
         except Exception as e:
-            self.status_label.text = "AI test failed"
+            self.status_label.text = "AI Request Failed"
             self.info_label.text = str(e)
         finally:
             self.test_ai_button.disabled = False
-            self.mic_check_button.disabled = False
 
 
 class VoiceAssistantApp(App):
