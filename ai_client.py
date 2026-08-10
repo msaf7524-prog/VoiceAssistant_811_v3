@@ -3,9 +3,10 @@ import requests
 
 class OpenAIClient:
     def __init__(self, api_key=None):
-        self.api_key = (api_key or os.environ.get("OPENAI_API_KEY", "")).strip()
-        self.url = "https://api.openai.com/v1/chat/completions"
-        self.model = "gpt-4o-mini"
+        self.api_key = (api_key or os.environ.get("GROQ_API_KEY", "")).strip()
+        # نقطة نهاية Groq المجانية
+        self.url = "https://api.groq.com/openai/v1/chat/completions"
+        self.model = "llama-3.1-8b-instant"
 
     def set_api_key(self, api_key):
         self.api_key = (api_key or "").strip()
@@ -18,7 +19,7 @@ class OpenAIClient:
         if not text:
             return "No input text."
         if not self.api_key:
-            return "OpenAI API key is missing."
+            return "Groq API key is missing."
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -36,13 +37,13 @@ class OpenAIClient:
                     message = data.get("error", {}).get("message", response.text)
                 except Exception:
                     message = response.text
-                return f"OpenAI API Error: {message}"
+                return f"Groq API Error: {message}"
             
             data = response.json()
             return data['choices'][0]['message']['content'].strip()
         except requests.exceptions.Timeout:
-            return "OpenAI request timed out."
+            return "Request timed out."
         except requests.exceptions.ConnectionError:
             return "No internet connection."
         except Exception as e:
-            return f"OpenAI bridge error: {e}"
+            return f"Bridge error: {e}"
