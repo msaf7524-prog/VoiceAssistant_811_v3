@@ -3,14 +3,17 @@ import threading
 import requests
 
 from kivy.app import App
-from kivy.clock import Clock
-from kivy.lang import Builder
+from kivy.clock import Clock, mainthread
 from kivy.utils import platform
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+from kivy.metrics import dp
 
-# -----------------------------------------------------------------------------
+# ==========================================
 # Groq API Client
-# -----------------------------------------------------------------------------
+# ==========================================
 class GroqClient:
     def __init__(self, api_key=""):
         self.api_key = api_key.strip()
@@ -39,341 +42,183 @@ class GroqClient:
             ],
             "temperature": 0.7
         }
-        response = requests.post(self.url, headers=headers, json=payload, timeout=20)
+        response = requests.post(self.url, headers=headers, json=payload, timeout=15)
         response.raise_for_status()
         data = response.json()
         return data["choices"][0]["message"]["content"].strip()
 
 
-# -----------------------------------------------------------------------------
-# Android Pyjnius Listeners
-# -----------------------------------------------------------------------------
-if platform == "android":
-    from jnius import PythonJavaClass, java_method, autoclass
-
-    class SpeechListener(PythonJavaClass):
-        __javainterfaces__ = ['android/speech/RecognitionListener']
-
-        def __init__(self, callback):
-            super().__init__()
-            self.callback = callback
-
-        @java_method('(I)V')
-        def onError(self, error):
-            self.callback('error', error)
-
-        @java_method('(Landroid/os/Bundle;)V')
-        def onResults(self, results):
-            ArrayList = autoclass('java.util.ArrayList')
-            matches = results.getStringArrayList(autoclass('android.speech.SpeechRecognizer').RESULTS_RECOGNITION)
-            if matches and matches.size() > 0:
-                text = str(matches.get(0))
-                self.callback('results', text)
-            else:
-                self.callback('error', 7)
-
-        @java_method('(Landroid/os/Bundle;)V')
-        def onPartialResults(self, results):
-            pass
-
-        @java_method('(ILandroid/os/Bundle;)V')
-        def onEvent(self, eventType, params):
-            pass
-
-        @java_method('([B)V')
-        def onBufferReceived(self, buffer):
-            pass
-
-        @java_method('()V')
-        def onBeginningOfSpeech(self):
-            self.callback('status', 'Listening... Speak now!')
-
-        @java_method('(F)V')
-        def onRmsChanged(self, rmsdB):
-            pass
-
-        @java_method('()V')
-        def onEndOfSpeech(self):
-            self.callback('status', 'Processing speech...')
-
-        @java_method('(Landroid/os/Bundle;)V')
-        def onReadyForSpeech(self, params):
-            self.callback('status', 'Microphone active. Say something...')
-
-
-    class TTSInitListener(PythonJavaClass):
-        __javainterfaces__ = ['android/speech/tts/TextToSpeech$OnInitListener']
-
-        def __init__(self, callback):
-            super().__init__()
-            self.callback = callback
-
-        @java_method('(I)V')
-        def onInit(self, status):
-            self.callback(status)
-
-
-# -----------------------------------------------------------------------------
-# Main UI Layout
-# -----------------------------------------------------------------------------
-KV_BUILDER = """
-<VoiceAssistant811>:
-    orientation: 'vertical'
-    padding: 20
-    spacing: 15
-
-    Label:
-        text: "Voice Assistant 811"
-        font_size: '22sp'
-        bold: True
-        size_hint_y: None
-        height: 40
-
-    TextInput:
-        id: api_key_input
-        hint_text: "Paste Groq API Key here"
-        multiline: False
-        password: True
-        size_hint_y: None
-        height: 45
-
-    Button:
-        id: voice_button
-        text: "Press & Speak"
-        font_size: '18sp'
-        bold: True
-        size_hint_y: None
-        height: 60
-        on_press: root.start_voice_pipeline()
-
-    Label:
-        id: status_label
-        text: "Status: Ready"
-        size_hint_y: None
-        height: 30
-        color: 0.3, 0.8, 0.3, 1
-
-    ScrollView:
-        Label:
-            id: info_label
-            text: "System initialized. Press button and speak."
-            size_hint_y: None
-            height: self.texture_size[1]
-            text_size: self.width, None
-            valign: 'top'
-"""
-
-Builder.load_string(KV_BUILDER)
-
-
+# ==========================================
+# Main Kivy UI Layout
+# ==========================================
 class VoiceAssistant811(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.orientation = "vertical"
+        self.spacing = dp(12)
+        self.padding = dp(16)
+
         self.ai_client = GroqClient()
-        self.is_listening = False
-        self.processing_ai = False
-        self.mic_permission_granted = False
-        self.speech_ready = False
-        self.tts_ready = False
-        self.speech_recognizer = None
         self.tts_engine = None
+        self.tts_ready = False
 
-        Clock.schedule_once(self._post_init, 0.5)
+        # Title
+        self.title_label = Label(
+            text="Voice Assistant 811",
+            font_size="22sp",
+            size_hint_y=None,
+            height=dp(40)
+        )
+        self.add_widget(self.title_label)
 
-    def _post_init(self, dt):
+        # API Key Input
+        self.api_key_input = TextInput(
+            hint_text="Paste Groq API Key here...",
+            multiline=False,
+            password=True,
+            font_size="15sp",
+            size_hint_y=None,
+            height=dp(48),
+            write_tab=False
+        )
+        self.add_widget(self.api_key_input)
+
+        # Action Button
+        self.action_button = Button(
+            text="Press & Speak",
+            font_size="18sp",
+            size_hint_y=None,
+            height=dp(52)
+        )
+        self.action_button.bind(on_press=self.on_button_click)
+        self.add_widget(self.action_button)
+
+        # Status Label
+        self.status_label = Label(
+            text="Status: Initializing...",
+            font_size="16sp",
+            size_hint_y=None,
+            height=dp(30),
+            color=(0, 1, 0, 1)
+        )
+        self.add_widget(self.status_label)
+
+        # Info/Output Label
+        self.info_label = Label(
+            text="System initializing...",
+            font_size="15sp",
+            halign="center",
+            valign="middle"
+        )
+        self.info_label.bind(size=self._update_text_size)
+        self.add_widget(self.info_label)
+
+        Clock.schedule_once(self._init_system, 0.5)
+
+    def _update_text_size(self, instance, value):
+        instance.text_size = (value[0], None)
+
+    @mainthread
+    def update_status(self, text, color=(1, 1, 1, 1)):
+        self.status_label.text = text
+        self.status_label.color = color
+
+    @mainthread
+    def update_info(self, text):
+        self.info_label.text = str(text)
+
+    @mainthread
+    def set_button_disabled(self, disabled_flag):
+        self.action_button.disabled = disabled_flag
+
+    def _init_system(self, dt):
         if platform == "android":
-            self._check_permissions()
-            self._init_speech_recognizer()
+            self.request_android_permissions()
             self._init_tts()
+        else:
+            self.update_status("Status: Ready (Desktop)")
+            self.update_info("System initialized.")
 
-    def _check_permissions(self):
-        if platform != "android":
-            return
-        from android.permissions import check_permission, PERMISSION
-        self.mic_permission_granted = check_permission(PERMISSION.RECORD_AUDIO)
-
-    def request_mic_permission(self, on_complete_callback=None):
-        if platform != "android":
-            return
-        from android.permissions import request_permissions, PERMISSION
-        def callback(permissions, results):
-            self.mic_permission_granted = all(results)
-            if self.mic_permission_granted and on_complete_callback:
-                on_complete_callback()
-            elif not self.mic_permission_granted:
-                self.ids.status_label.text = "Microphone permission denied"
-        request_permissions([PERMISSION.RECORD_AUDIO], callback)
-
-    def _init_speech_recognizer(self):
-        if platform != "android":
-            return
+    def request_android_permissions(self):
         try:
-            from jnius import autoclass
-            SpeechRecognizer = autoclass('android.speech.SpeechRecognizer')
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            activity = PythonActivity.mActivity
+            from android.permissions import request_permissions, check_permission, Permission
+            def permission_callback(permissions, results):
+                if all(results):
+                    self.update_status("Status: Permissions Granted", color=(0, 1, 0, 1))
+                else:
+                    self.update_status("Status: Permission Denied", color=(1, 0, 0, 1))
 
-            if SpeechRecognizer.isRecognitionAvailable(activity):
-                self.speech_recognizer = SpeechRecognizer.createSpeechRecognizer(activity)
-                self.speech_listener = SpeechListener(self._speech_callback)
-                self.speech_recognizer.setRecognitionListener(self.speech_listener)
-                self.speech_ready = True
+            if not check_permission(Permission.RECORD_AUDIO):
+                request_permissions([Permission.RECORD_AUDIO], permission_callback)
+            else:
+                self.update_status("Status: Ready", color=(0, 1, 0, 1))
+                self.update_info("System initialized. Press button and speak.")
         except Exception as e:
-            self.speech_ready = False
+            self.update_info(f"Permission error: {e}")
 
     def _init_tts(self):
-        if platform != "android":
-            return
         try:
-            from jnius import autoclass
-            TextToSpeech = autoclass('android.speech.tts.TextToSpeech')
-            PythonActivity = autoclass('org.kivy.android.PythonActivity')
-            activity = PythonActivity.mActivity
+            from jnius import autoclass, PythonJavaClass, java_method
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
+            Locale = autoclass("java.util.Locale")
 
-            self.tts_listener = TTSInitListener(self._tts_init_callback)
-            self.tts_engine = TextToSpeech(activity, self.tts_listener)
-        except Exception:
-            self.tts_ready = False
+            class TTSInitListener(PythonJavaClass):
+                __javainterfaces__ = ["android/speech/tts/TextToSpeech$OnInitListener"]
+                def __init__(self, outer):
+                    super().__init__()
+                    self.outer = outer
 
-    def _tts_init_callback(self, status):
-        from jnius import autoclass
-        TextToSpeech = autoclass('android.speech.tts.TextToSpeech')
-        self.tts_ready = (status == TextToSpeech.SUCCESS)
+                @java_method("(I)V")
+                def onInit(self, status):
+                    if status == TextToSpeech.SUCCESS:
+                        self.outer.tts_engine.setLanguage(Locale.US)
+                        self.outer.tts_ready = True
 
-    def start_voice_pipeline(self):
-        api_key = self.ids.api_key_input.text.strip()
-        self.ai_client.set_api_key(api_key)
-
-        if not self.ai_client.is_ready:
-            self.ids.status_label.text = "Please enter Groq API Key first."
-            return
-
-        if platform == "android" and not self.mic_permission_granted:
-            self.request_mic_permission(on_complete_callback=self._start_listening)
-            return
-
-        self._start_listening()
-
-    def _start_listening(self):
-        if platform != "android":
-            self.ids.status_label.text = "Voice speech is Android only."
-            return
-
-        if not self.speech_ready or not self.speech_recognizer:
-            self._init_speech_recognizer()
-            if not self.speech_ready:
-                self.ids.status_label.text = "Speech Recognizer unavailable."
-                return
-
-        try:
-            from jnius import autoclass
-            Intent = autoclass('android.content.Intent')
-            RecognizerIntent = autoclass('android.speech.RecognizerIntent')
-
-            intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-
-            self.is_listening = True
-            self.ids.voice_button.disabled = True
-            self.ids.voice_button.text = "Listening..."
-            self.ids.status_label.text = "Activating Microphone..."
-
-            self.speech_recognizer.startListening(intent)
+            self.listener = TTSInitListener(self)
+            self.tts_engine = TextToSpeech(PythonActivity.mActivity, self.listener)
         except Exception as e:
-            self._reset_button()
-            self.ids.status_label.text = "Failed to start microphone."
-            self.ids.info_label.text = str(e)
-
-    def _speech_callback(self, event_type, data):
-        if event_type == 'status':
-            Clock.schedule_once(lambda dt: setattr(self.ids.status_label, 'text', str(data)), 0)
-        elif event_type == 'results':
-            Clock.schedule_once(lambda dt: self._on_speech_captured(data), 0)
-        elif event_type == 'error':
-            Clock.schedule_once(lambda dt: self._on_speech_error(data), 0)
-
-    def _on_speech_captured(self, text):
-        self.is_listening = False
-        self.ids.info_label.text = f"You said: {text}"
-        self.ids.status_label.text = "Sending to AI..."
-        self._send_to_ai(text)
-
-    def _on_speech_error(self, error_code):
-        self.is_listening = False
-        self._reset_button()
-        errors = {
-            6: "Speech timeout. Try speaking faster.",
-            7: "No speech recognized. Please try again.",
-            9: "Microphone permission error."
-        }
-        msg = errors.get(int(error_code), f"Listening error code: {error_code}")
-        self.ids.status_label.text = msg
-
-    def _send_to_ai(self, user_text):
-        self.processing_ai = True
-        self.ids.voice_button.text = "AI Thinking..."
-
-        def worker():
-            try:
-                reply = self.ai_client.ask(user_text)
-                Clock.schedule_once(lambda dt: self._on_ai_reply(user_text, reply), 0)
-            except Exception as e:
-                Clock.schedule_once(lambda dt: self._on_ai_error(str(e)), 0)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_ai_reply(self, user_text, reply):
-        self.processing_ai = False
-        self._reset_button()
-        self.ids.status_label.text = "AI Reply Received"
-        self.ids.info_label.text = f"You: {user_text}\n\nAI: {reply}"
-        self.speak_text(reply)
-
-    def _on_ai_error(self, err_msg):
-        self.processing_ai = False
-        self._reset_button()
-        self.ids.status_label.text = "AI Request Failed"
-        self.ids.info_label.text = err_msg
-
-    def _reset_button(self):
-        self.ids.voice_button.disabled = False
-        self.ids.voice_button.text = "Press & Speak"
+            self.update_info(f"TTS Init Error: {e}")
 
     def speak_text(self, text):
-        if platform != "android" or not self.tts_engine or not self.tts_ready:
-            return
-        try:
-            from jnius import autoclass
-            TextToSpeech = autoclass('android.speech.tts.TextToSpeech')
-            Locale = autoclass('java.util.Locale')
-            self.tts_engine.setLanguage(Locale.US)
-            self.tts_engine.speak(text, TextToSpeech.QUEUE_FLUSH, None, "voice_811")
-        except Exception:
-            pass
+        if platform == "android" and self.tts_engine and self.tts_ready:
+            try:
+                from jnius import autoclass
+                TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
+                self.tts_engine.speak(text, TextToSpeech.QUEUE_FLUSH, None, None)
+            except Exception as e:
+                self.update_info(f"Speak error: {e}")
 
-    def cleanup_android(self):
-        if platform != "android":
+    def on_button_click(self, instance):
+        api_key = self.api_key_input.text.strip()
+        if not api_key:
+            self.update_status("Error: Paste API Key", color=(1, 0, 0, 1))
             return
-        if self.speech_recognizer:
-            try:
-                self.speech_recognizer.destroy()
-            except Exception:
-                pass
-        if self.tts_engine:
-            try:
-                self.tts_engine.shutdown()
-            except Exception:
-                pass
+
+        self.ai_client.set_api_key(api_key)
+        self.set_button_disabled(True)
+        self.update_status("Sending request to AI...", color=(1, 1, 0, 1))
+
+        threading.Thread(target=self._run_ai_thread, daemon=True).start()
+
+    def _run_ai_thread(self):
+        try:
+            prompt = "Say hello in one short friendly sentence."
+            result = self.ai_client.ask(prompt)
+            self.update_status("Status: AI Response Received", color=(0, 1, 0, 1))
+            self.update_info(result)
+            self.speak_text(result)
+        except Exception as e:
+            self.update_status("Status: AI Request Failed", color=(1, 0, 0, 1))
+            self.update_info(f"Error: {e}")
+        finally:
+            self.set_button_disabled(False)
 
 
 class VoiceAssistantApp(App):
     def build(self):
-        self.root_widget = VoiceAssistant811()
-        return self.root_widget
-
-    def on_stop(self):
-        if hasattr(self, "root_widget"):
-            self.root_widget.cleanup_android()
+        self.title = "Voice Assistant 811"
+        return VoiceAssistant811()
 
 
 if __name__ == "__main__":
