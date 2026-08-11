@@ -11,6 +11,14 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.metrics import dp
 
+if platform == "android":
+    from android.runnable import run_on_ui_thread
+else:
+    def run_on_ui_thread(func):
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+
 # ==========================================
 # Groq API Client
 # ==========================================
@@ -182,6 +190,7 @@ class VoiceAssistant811(BoxLayout):
         except Exception as e:
             self.update_info(f"TTS Init Error: {e}")
 
+    @run_on_ui_thread
     def _init_stt(self):
         try:
             from jnius import autoclass, PythonJavaClass, java_method
@@ -256,6 +265,7 @@ class VoiceAssistant811(BoxLayout):
             except Exception as e:
                 self.update_info(f"Speak error: {e}")
 
+    @run_on_ui_thread
     def start_listening(self):
         if platform == "android" and self.speech_recognizer:
             try:
