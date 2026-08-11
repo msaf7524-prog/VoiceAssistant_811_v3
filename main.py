@@ -1,14 +1,18 @@
+import math
+import random
 import os
 import threading
 import requests
 
 from kivy.app import App
 from kivy.clock import Clock, mainthread
-from kivy.utils import platform
+from kivy.utils import platform, get_color_from_hex
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
+from kivy.uix.widget import Widget
+from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
 from kivy.metrics import dp
 
 if platform == "android":
@@ -57,26 +61,140 @@ class GroqClient:
 
 
 # ==========================================
+# Animated Voice Visualizer (Glow Orb & Waves)
+# ==========================================
+class VoiceVisualizer(Widget):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.state = "idle"  # idle, listening, processing, speaking
+        self.anim_time = 0
+        self.bar_heights = [0.2, 0.4, 0.6, 0.4, 0.2]
+        
+        # Color palettes per state (RGB)
+        self.colors = {
+            "idle": (0.2, 0.4, 0.9),       # Calm Blue
+            "listening": (0.0, 0.75, 1.0),   # Vibrant Cyan
+            "processing": (1.0, 0.65, 0.0),  # Golden Amber
+            "speaking": (0.1, 0.85, 0.45)    # Emerald Green
+        }
+        
+        self.bind(pos=self.update_canvas, size=self.update_canvas)
+        Clock.schedule_interval(self.animate, 1.0 / 30.0)
+
+    def set_state(self, new_state):
+        if new_state in self.colors:
+            self.state = new_state
+
+    def animate(self, dt):
+        self.anim_time += dt
+        
+        # Animate bar wave targets based on status
+        if self.state in ("listening", "speaking"):
+            mult = 1.0 if self.state == "speaking" else 0.8
+            self.bar_heights = [
+                0.2 + mult * 0.7 * math.sin(self.anim_time * 8 + i * 0.8)**2
+                for i in range(5)
+            ]
+        elif self.state == "processing":
+            self.bar_heights = [
+                0.3 + 0.3 * math.sin(self.anim_time * 12 + i)
+                for i in range(5)
+            ]
+        else:
+            self.bar_heights = [
+                0.15 + 0.1 * math.sin(self.anim_time * 2 + i)
+                for i in range(5)
+            ]
+            
+        self.update_canvas()
+
+    def update_canvas(self, *args):
+        self.canvas.clear()
+        cx, cy = self.center_x, self.center_y
+        base_r = min(self.width, self.height) * 0.25
+        
+        r_col, g_col, b_col = self.colors.get(self.state, (0.2, 0.4, 0.9))
+        
+        with self.canvas:
+            # 1. Expanding Outer Glow Rings (Ripples)
+            for i in range(3):
+                pulse = (self.anim_time * 1.5 + i * 0.5) % 1.5
+                ring_r = base_r + pulse * dp(40)
+                alpha = max(0, 1.0 - (pulse / 1.5)) * 0.35
+                Color(r_col, g_col, b_col, alpha)
+                Line(circle=(cx, cy, ring_r), width=dp(2))
+
+            # 2. Outer Soft Aura
+            aura_pulse = math.sin(self.anim_time * 3) * dp(6)
+            Color(r_col, g_col, b_col, 0.25)
+            Ellipse(
+                pos=(cx - (base_r + aura_pulse), cy - (base_r + aura_pulse)),
+                size=((base_r + aura_pulse) * 2, (base_r + aura_pulse) * 2)
+            )
+
+            # 3. Main Central Glowing Orb
+            Color(r_col, g_col, b_col, 0.9)
+            Ellipse(
+                pos=(cx - base_r, cy - base_r),
+                size=(base_r * 2, base_r * 2)
+            )
+
+            # 4. Inner Bright Highlight (3D Effect)
+            Color(1, 1, 1, 0.4)
+            highlight_r = base_r * 0.6
+            Ellipse(
+                pos=(cx - highlight_r * 0.5, cy + highlight_r * 0.1),
+                size=(highlight_r, highlight_r * 0.7)
+            )
+
+            # 5. Dynamic Sound Wave Bars in Center
+            bar_width = dp(6)
+            gap = dp(5)
+            total_w = (5 * bar_width) + (4 * gap)
+            start_x = cx - (total_w / 2)
+            max_bar_h = base_r * 1.1
+
+            Color(1, 1, 1, 0.95)
+            for i, h_factor in enumerate(self.bar_heights):
+                bar_h = max(dp(8), max_bar_h * h_factor)
+                bx = start_x + i * (bar_width + gap)
+                by = cy - (bar_h / 2)
+                RoundedRectangle(
+                    pos=(bx, by),
+                    size=(bar_width, bar_h),
+                    radius=[dp(3)]
+                )
+
+
+# ==========================================
 # Main Kivy UI Layout
 # ==========================================
 class VoiceAssistant811(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
-        self.spacing = dp(12)
-        self.padding = dp(16)
+        self.spacing = dp(14)
+        self.padding = dp(20)
+
+        # Apply dark background
+        with self.canvas.before:
+            Color(0.07, 0.07, 0.09, 1)  # Premium Dark background
+            self.bg_rect = RoundedRectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_bg, size=self._update_bg)
 
         self.ai_client = GroqClient()
         self.tts_engine = None
         self.tts_ready = False
         self.speech_recognizer = None
 
-        # Title
+        # App Title Header
         self.title_label = Label(
-            text="Voice Assistant 811",
-            font_size="22sp",
+            text="VOICE ASSISTANT 811",
+            font_size="20sp",
+            bold=True,
+            color=(0.9, 0.9, 0.95, 1),
             size_hint_y=None,
-            height=dp(40)
+            height=dp(35)
         )
         self.add_widget(self.title_label)
 
@@ -85,52 +203,74 @@ class VoiceAssistant811(BoxLayout):
             hint_text="Paste Groq API Key here...",
             multiline=False,
             password=True,
-            font_size="15sp",
+            font_size="14sp",
             size_hint_y=None,
-            height=dp(48),
+            height=dp(46),
+            padding=[dp(12), dp(12)],
+            background_color=(0.15, 0.15, 0.18, 1),
+            foreground_color=(1, 1, 1, 1),
+            cursor_color=(0, 0.75, 1, 1),
             write_tab=False
         )
         self.add_widget(self.api_key_input)
 
-        # Action Button
-        self.action_button = Button(
-            text="Press & Speak",
-            font_size="18sp",
-            size_hint_y=None,
-            height=dp(52)
+        # Voice Visualizer Hero Element
+        self.visualizer = VoiceVisualizer(
+            size_hint=(1, 1)
         )
-        self.action_button.bind(on_press=self.on_button_click)
-        self.add_widget(self.action_button)
+        self.add_widget(self.visualizer)
 
-        # Status Label
+        # Status Badge
         self.status_label = Label(
-            text="Status: Initializing...",
-            font_size="16sp",
+            text="Status: Ready",
+            font_size="15sp",
+            bold=True,
             size_hint_y=None,
-            height=dp(30),
-            color=(0, 1, 0, 1)
+            height=dp(28),
+            color=(0, 0.75, 1, 1)
         )
         self.add_widget(self.status_label)
 
-        # Info/Output Label
+        # Dynamic Response Text Box
         self.info_label = Label(
-            text="System initializing...",
+            text="Tap button below and start speaking...",
             font_size="15sp",
+            color=(0.8, 0.8, 0.85, 1),
             halign="center",
-            valign="middle"
+            valign="middle",
+            size_hint_y=None,
+            height=dp(70)
         )
         self.info_label.bind(size=self._update_text_size)
         self.add_widget(self.info_label)
 
+        # Action Control Button
+        self.action_button = Button(
+            text="Tap to Speak",
+            font_size="17sp",
+            bold=True,
+            size_hint_y=None,
+            height=dp(54),
+            background_normal="",
+            background_color=(0, 0.45, 0.9, 1)
+        )
+        self.action_button.bind(on_press=self.on_button_click)
+        self.add_widget(self.action_button)
+
         Clock.schedule_once(self._init_system, 0.5)
+
+    def _update_bg(self, instance, value):
+        self.bg_rect.pos = instance.pos
+        self.bg_rect.size = instance.size
 
     def _update_text_size(self, instance, value):
         instance.text_size = (value[0], None)
 
     @mainthread
-    def update_status(self, text, color=(1, 1, 1, 1)):
+    def update_status(self, text, color=(1, 1, 1, 1), state="idle"):
         self.status_label.text = text
         self.status_label.color = color
+        self.visualizer.set_state(state)
 
     @mainthread
     def update_info(self, text):
@@ -139,6 +279,7 @@ class VoiceAssistant811(BoxLayout):
     @mainthread
     def set_button_disabled(self, disabled_flag):
         self.action_button.disabled = disabled_flag
+        self.action_button.background_color = (0.2, 0.2, 0.25, 1) if disabled_flag else (0, 0.45, 0.9, 1)
 
     def _init_system(self, dt):
         if platform == "android":
@@ -146,7 +287,7 @@ class VoiceAssistant811(BoxLayout):
             self._init_tts()
             self._init_stt()
         else:
-            self.update_status("Status: Ready (Desktop)")
+            self.update_status("Status: Ready (Desktop)", state="idle")
             self.update_info("System initialized.")
 
     def request_android_permissions(self):
@@ -154,15 +295,15 @@ class VoiceAssistant811(BoxLayout):
             from android.permissions import request_permissions, check_permission, Permission
             def permission_callback(permissions, results):
                 if all(results):
-                    self.update_status("Status: Permissions Granted", color=(0, 1, 0, 1))
+                    self.update_status("Status: Permissions Granted", color=(0, 1, 0, 1), state="idle")
                 else:
-                    self.update_status("Status: Permission Denied", color=(1, 0, 0, 1))
+                    self.update_status("Status: Permission Denied", color=(1, 0, 0, 1), state="idle")
 
             if not check_permission(Permission.RECORD_AUDIO):
                 request_permissions([Permission.RECORD_AUDIO], permission_callback)
             else:
-                self.update_status("Status: Ready", color=(0, 1, 0, 1))
-                self.update_info("System initialized. Press button and speak.")
+                self.update_status("Status: Ready", color=(0, 0.75, 1, 1), state="idle")
+                self.update_info("System initialized. Press button to speak.")
         except Exception as e:
             self.update_info(f"Permission error: {e}")
 
@@ -206,7 +347,7 @@ class VoiceAssistant811(BoxLayout):
 
                 @java_method("(Landroid/os/Bundle;)V")
                 def onReadyForSpeech(self, params):
-                    self.outer.update_status("Listening...", color=(0, 1, 1, 1))
+                    self.outer.update_status("Listening...", color=(0, 0.75, 1, 1), state="listening")
 
                 @java_method("()V")
                 def onBeginningOfSpeech(self):
@@ -222,11 +363,11 @@ class VoiceAssistant811(BoxLayout):
 
                 @java_method("()V")
                 def onEndOfSpeech(self):
-                    self.outer.update_status("Processing speech...", color=(1, 1, 0, 1))
+                    self.outer.update_status("Processing speech...", color=(1, 0.65, 0, 1), state="processing")
 
                 @java_method("(I)V")
                 def onError(self, error):
-                    self.outer.update_status(f"STT Error code: {error}", color=(1, 0, 0, 1))
+                    self.outer.update_status(f"STT Error code: {error}", color=(1, 0.2, 0.2, 1), state="idle")
                     self.outer.set_button_disabled(False)
 
                 @java_method("(Landroid/os/Bundle;)V")
@@ -237,7 +378,7 @@ class VoiceAssistant811(BoxLayout):
                         spoken_text = matches.get(0)
                         self.outer.on_speech_recognized(spoken_text)
                     else:
-                        self.outer.update_status("No speech heard", color=(1, 0, 0, 1))
+                        self.outer.update_status("No speech heard", color=(1, 0.3, 0.3, 1), state="idle")
                         self.outer.set_button_disabled(False)
 
                 @java_method("(Landroid/os/Bundle;)V")
@@ -288,27 +429,27 @@ class VoiceAssistant811(BoxLayout):
     def on_button_click(self, instance):
         api_key = self.api_key_input.text.strip()
         if not api_key:
-            self.update_status("Error: Paste API Key", color=(1, 0, 0, 1))
+            self.update_status("Error: Paste API Key", color=(1, 0.2, 0.2, 1), state="idle")
             return
 
         self.ai_client.set_api_key(api_key)
         self.set_button_disabled(True)
-        self.update_status("Listening...", color=(0, 1, 1, 1))
+        self.update_status("Listening...", color=(0, 0.75, 1, 1), state="listening")
         self.start_listening()
 
     def on_speech_recognized(self, spoken_text):
         self.update_info(f"You: {spoken_text}")
-        self.update_status("Sending to AI...", color=(1, 1, 0, 1))
+        self.update_status("Thinking...", color=(1, 0.65, 0, 1), state="processing")
         threading.Thread(target=self._run_ai_thread, args=(spoken_text,), daemon=True).start()
 
     def _run_ai_thread(self, user_prompt):
         try:
             result = self.ai_client.ask(user_prompt)
-            self.update_status("Status: AI Response Received", color=(0, 1, 0, 1))
+            self.update_status("Speaking...", color=(0.1, 0.85, 0.45, 1), state="speaking")
             self.update_info(f"You: {user_prompt}\n\nAI: {result}")
             self.speak_text(result)
         except Exception as e:
-            self.update_status("Status: AI Request Failed", color=(1, 0, 0, 1))
+            self.update_status("AI Request Failed", color=(1, 0.2, 0.2, 1), state="idle")
             self.update_info(f"Error: {e}")
         finally:
             self.set_button_disabled(False)
