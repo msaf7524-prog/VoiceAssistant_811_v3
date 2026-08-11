@@ -15,6 +15,27 @@ from kivy.uix.widget import Widget
 from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
 from kivy.metrics import dp
 
+# ==========================================
+# Arabic Text Shaping & BiDi Handler
+# ==========================================
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+    HAS_BIDI = True
+except ImportError:
+    HAS_BIDI = False
+
+def fix_text(text):
+    if not text:
+        return ""
+    if HAS_BIDI:
+        try:
+            reshaped = arabic_reshaper.reshape(str(text))
+            return get_display(reshaped)
+        except Exception:
+            return str(text)
+    return str(text)
+
 if platform == "android":
     from android.runnable import run_on_ui_thread
 else:
@@ -24,13 +45,13 @@ else:
         return wrapper
 
 # ==========================================
-# Arabic Font Helper for Android & Desktop
+# Arabic Font Helper
 # ==========================================
 def get_arabic_font():
     if platform == "android":
         possible_fonts = [
-            "/system/fonts/NotoNaskhArabic-Regular.ttf",
             "/system/fonts/NotoSansArabic-Regular.ttf",
+            "/system/fonts/NotoNaskhArabic-Regular.ttf",
             "/system/fonts/NotoSansArabicUI-Regular.ttf",
             "/system/fonts/DroidSansArabic.ttf"
         ]
@@ -204,7 +225,7 @@ class VoiceAssistant811(BoxLayout):
         self.tts_ready = False
         self.speech_recognizer = None
 
-        # App Title Header
+        # App Title Header (Standard Font for English)
         self.title_label = Label(
             text="VOICE ASSISTANT 811",
             font_size="20sp",
@@ -213,11 +234,9 @@ class VoiceAssistant811(BoxLayout):
             size_hint_y=None,
             height=dp(35)
         )
-        if ARABIC_FONT:
-            self.title_label.font_name = ARABIC_FONT
         self.add_widget(self.title_label)
 
-        # API Key Input
+        # API Key Input (Standard Font for English)
         self.api_key_input = TextInput(
             hint_text="Paste Groq API Key here...",
             multiline=False,
@@ -231,8 +250,6 @@ class VoiceAssistant811(BoxLayout):
             cursor_color=(0, 0.75, 1, 1),
             write_tab=False
         )
-        if ARABIC_FONT:
-            self.api_key_input.font_name = ARABIC_FONT
         self.add_widget(self.api_key_input)
 
         # Voice Visualizer Hero Element
@@ -241,7 +258,7 @@ class VoiceAssistant811(BoxLayout):
         )
         self.add_widget(self.visualizer)
 
-        # Status Badge
+        # Status Badge (Standard Font for English)
         self.status_label = Label(
             text="Status: Ready",
             font_size="15sp",
@@ -250,13 +267,11 @@ class VoiceAssistant811(BoxLayout):
             height=dp(28),
             color=(0, 0.75, 1, 1)
         )
-        if ARABIC_FONT:
-            self.status_label.font_name = ARABIC_FONT
         self.add_widget(self.status_label)
 
-        # Dynamic Response Text Box
+        # Dynamic Response Text Box (Arabic Font Enabled)
         self.info_label = Label(
-            text="اضغط على الزر وابدأ بالتحدث...",
+            text=fix_text("اضغط على الزر وابدأ بالتحدث..."),
             font_size="15sp",
             color=(0.8, 0.8, 0.85, 1),
             halign="center",
@@ -269,7 +284,7 @@ class VoiceAssistant811(BoxLayout):
         self.info_label.bind(size=self._update_text_size)
         self.add_widget(self.info_label)
 
-        # Action Control Button
+        # Action Control Button (Standard Font for English)
         self.action_button = Button(
             text="Tap to Speak",
             font_size="17sp",
@@ -279,8 +294,6 @@ class VoiceAssistant811(BoxLayout):
             background_normal="",
             background_color=(0, 0.45, 0.9, 1)
         )
-        if ARABIC_FONT:
-            self.action_button.font_name = ARABIC_FONT
         self.action_button.bind(on_press=self.on_button_click)
         self.add_widget(self.action_button)
 
@@ -295,13 +308,13 @@ class VoiceAssistant811(BoxLayout):
 
     @mainthread
     def update_status(self, text, color=(1, 1, 1, 1), state="idle"):
-        self.status_label.text = text
+        self.status_label.text = str(text)
         self.status_label.color = color
         self.visualizer.set_state(state)
 
     @mainthread
     def update_info(self, text):
-        self.info_label.text = str(text)
+        self.info_label.text = fix_text(str(text))
 
     @mainthread
     def set_button_disabled(self, disabled_flag):
@@ -339,7 +352,6 @@ class VoiceAssistant811(BoxLayout):
             from jnius import autoclass, PythonJavaClass, java_method
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
-            Locale = autoclass("java.util.Locale")
 
             class TTSInitListener(PythonJavaClass):
                 __javainterfaces__ = ["android/speech/tts/TextToSpeech$OnInitListener"]
