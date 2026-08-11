@@ -185,7 +185,10 @@ class VoiceAssistant811(BoxLayout):
             try:
                 from jnius import autoclass
                 TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
-                self.tts_engine.speak(text, TextToSpeech.QUEUE_FLUSH, None, None)
+                HashMap = autoclass("java.util.HashMap")
+                
+                params = HashMap()
+                self.tts_engine.speak(str(text), TextToSpeech.QUEUE_FLUSH, params)
             except Exception as e:
                 self.update_info(f"Speak error: {e}")
 
