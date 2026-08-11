@@ -27,7 +27,7 @@ jobs:
       - name: Install System Packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libffi-dev libssl-dev ccache git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libsqlite3-dev
+          sudo apt-get install -y build-essential libffi-dev libssl-dev ccache git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libsqlite3-dev
 
       - name: Build APK with Buildozer
         run: |
