@@ -61,6 +61,7 @@ class VoiceAssistant811(BoxLayout):
         self.ai_client = GroqClient()
         self.tts_engine = None
         self.tts_ready = False
+        self.speech_recognizer = None
 
         # Title
         self.title_label = Label(
@@ -135,6 +136,7 @@ class VoiceAssistant811(BoxLayout):
         if platform == "android":
             self.request_android_permissions()
             self._init_tts()
+            self._init_stt()
         else:
             self.update_status("Status: Ready (Desktop)")
             self.update_info("System initialized.")
@@ -180,17 +182,99 @@ class VoiceAssistant811(BoxLayout):
         except Exception as e:
             self.update_info(f"TTS Init Error: {e}")
 
+    def _init_stt(self):
+        try:
+            from jnius import autoclass, PythonJavaClass, java_method
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
+
+            class SpeechListener(PythonJavaClass):
+                __javainterfaces__ = ["android/speech/RecognitionListener"]
+
+                def __init__(self, outer):
+                    super().__init__()
+                    self.outer = outer
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onReadyForSpeech(self, params):
+                    self.outer.update_status("Listening...", color=(0, 1, 1, 1))
+
+                @java_method("()V")
+                def onBeginningOfSpeech(self):
+                    pass
+
+                @java_method("(F)V")
+                def onRmsChanged(self, rmsdB):
+                    pass
+
+                @java_method("([B)V")
+                def onBufferReceived(self, buffer):
+                    pass
+
+                @java_method("()V")
+                def onEndOfSpeech(self):
+                    self.outer.update_status("Processing speech...", color=(1, 1, 0, 1))
+
+                @java_method("(I)V")
+                def onError(self, error):
+                    self.outer.update_status(f"STT Error code: {error}", color=(1, 0, 0, 1))
+                    self.outer.set_button_disabled(False)
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onResults(self, results):
+                    SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
+                    matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if matches and matches.size() > 0:
+                        spoken_text = matches.get(0)
+                        self.outer.on_speech_recognized(spoken_text)
+                    else:
+                        self.outer.update_status("No speech heard", color=(1, 0, 0, 1))
+                        self.outer.set_button_disabled(False)
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onPartialResults(self, results):
+                    pass
+
+                @java_method("(I Landroid/os/Bundle;)V")
+                def onEvent(self, eventType, params):
+                    pass
+
+            self.stt_listener = SpeechListener(self)
+            self.speech_recognizer = SpeechRecognizer.createSpeechRecognizer(PythonActivity.mActivity)
+            self.speech_recognizer.setRecognitionListener(self.stt_listener)
+        except Exception as e:
+            self.update_info(f"STT Init Error: {e}")
+
     def speak_text(self, text):
         if platform == "android" and self.tts_engine and self.tts_ready:
             try:
                 from jnius import autoclass
                 TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
                 HashMap = autoclass("java.util.HashMap")
-                
                 params = HashMap()
                 self.tts_engine.speak(str(text), TextToSpeech.QUEUE_FLUSH, params)
             except Exception as e:
                 self.update_info(f"Speak error: {e}")
+
+    def start_listening(self):
+        if platform == "android" and self.speech_recognizer:
+            try:
+                from jnius import autoclass
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                Intent = autoclass("android.content.Intent")
+                RecognizerIntent = autoclass("android.speech.RecognizerIntent")
+
+                intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+
+                self.speech_recognizer.startListening(intent)
+            except Exception as e:
+                self.update_info(f"Start listening error: {e}")
+                self.set_button_disabled(False)
+        else:
+            # Fallback for testing on desktop
+            self.on_speech_recognized("Hello, how are you?")
 
     def on_button_click(self, instance):
         api_key = self.api_key_input.text.strip()
@@ -200,16 +284,19 @@ class VoiceAssistant811(BoxLayout):
 
         self.ai_client.set_api_key(api_key)
         self.set_button_disabled(True)
-        self.update_status("Sending request to AI...", color=(1, 1, 0, 1))
+        self.update_status("Listening...", color=(0, 1, 1, 1))
+        self.start_listening()
 
-        threading.Thread(target=self._run_ai_thread, daemon=True).start()
+    def on_speech_recognized(self, spoken_text):
+        self.update_info(f"You: {spoken_text}")
+        self.update_status("Sending to AI...", color=(1, 1, 0, 1))
+        threading.Thread(target=self._run_ai_thread, args=(spoken_text,), daemon=True).start()
 
-    def _run_ai_thread(self):
+    def _run_ai_thread(self, user_prompt):
         try:
-            prompt = "Say hello in one short friendly sentence."
-            result = self.ai_client.ask(prompt)
+            result = self.ai_client.ask(user_prompt)
             self.update_status("Status: AI Response Received", color=(0, 1, 0, 1))
-            self.update_info(result)
+            self.update_info(f"You: {user_prompt}\n\nAI: {result}")
             self.speak_text(result)
         except Exception as e:
             self.update_status("Status: AI Request Failed", color=(1, 0, 0, 1))
