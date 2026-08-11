@@ -235,7 +235,7 @@ class VoiceAssistant811(BoxLayout):
                 def onPartialResults(self, results):
                     pass
 
-                @java_method("(I Landroid/os/Bundle;)V")
+                @java_method("(ILandroid/os/Bundle;)V")
                 def onEvent(self, eventType, params):
                     pass
 
@@ -273,7 +273,6 @@ class VoiceAssistant811(BoxLayout):
                 self.update_info(f"Start listening error: {e}")
                 self.set_button_disabled(False)
         else:
-            # Fallback for testing on desktop
             self.on_speech_recognized("Hello, how are you?")
 
     def on_button_click(self, instance):
