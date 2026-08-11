@@ -24,6 +24,24 @@ else:
         return wrapper
 
 # ==========================================
+# Arabic Font Helper for Android & Desktop
+# ==========================================
+def get_arabic_font():
+    if platform == "android":
+        possible_fonts = [
+            "/system/fonts/NotoNaskhArabic-Regular.ttf",
+            "/system/fonts/NotoSansArabic-Regular.ttf",
+            "/system/fonts/NotoSansArabicUI-Regular.ttf",
+            "/system/fonts/DroidSansArabic.ttf"
+        ]
+        for font_path in possible_fonts:
+            if os.path.exists(font_path):
+                return font_path
+    return None
+
+ARABIC_FONT = get_arabic_font()
+
+# ==========================================
 # Groq API Client
 # ==========================================
 class GroqClient:
@@ -49,7 +67,7 @@ class GroqClient:
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
-                {"role": "system", "content": "You are a helpful voice assistant. Keep answers short and natural for speech output."},
+                {"role": "system", "content": "You are a helpful voice assistant. Respond in the same language as the user input (Arabic or English). Keep answers short, concise, and natural for speech output."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7
@@ -88,7 +106,6 @@ class VoiceVisualizer(Widget):
     def animate(self, dt):
         self.anim_time += dt
         
-        # Animate bar wave targets based on status
         if self.state in ("listening", "speaking"):
             mult = 1.0 if self.state == "speaking" else 0.8
             self.bar_heights = [
@@ -139,7 +156,7 @@ class VoiceVisualizer(Widget):
                 size=(base_r * 2, base_r * 2)
             )
 
-            # 4. Inner Bright Highlight (3D Effect)
+            # 4. Inner Bright Highlight
             Color(1, 1, 1, 0.4)
             highlight_r = base_r * 0.6
             Ellipse(
@@ -147,7 +164,7 @@ class VoiceVisualizer(Widget):
                 size=(highlight_r, highlight_r * 0.7)
             )
 
-            # 5. Dynamic Sound Wave Bars in Center
+            # 5. Dynamic Sound Wave Bars
             bar_width = dp(6)
             gap = dp(5)
             total_w = (5 * bar_width) + (4 * gap)
@@ -178,7 +195,7 @@ class VoiceAssistant811(BoxLayout):
 
         # Apply dark background
         with self.canvas.before:
-            Color(0.07, 0.07, 0.09, 1)  # Premium Dark background
+            Color(0.07, 0.07, 0.09, 1)
             self.bg_rect = RoundedRectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._update_bg, size=self._update_bg)
 
@@ -196,6 +213,8 @@ class VoiceAssistant811(BoxLayout):
             size_hint_y=None,
             height=dp(35)
         )
+        if ARABIC_FONT:
+            self.title_label.font_name = ARABIC_FONT
         self.add_widget(self.title_label)
 
         # API Key Input
@@ -212,6 +231,8 @@ class VoiceAssistant811(BoxLayout):
             cursor_color=(0, 0.75, 1, 1),
             write_tab=False
         )
+        if ARABIC_FONT:
+            self.api_key_input.font_name = ARABIC_FONT
         self.add_widget(self.api_key_input)
 
         # Voice Visualizer Hero Element
@@ -229,18 +250,22 @@ class VoiceAssistant811(BoxLayout):
             height=dp(28),
             color=(0, 0.75, 1, 1)
         )
+        if ARABIC_FONT:
+            self.status_label.font_name = ARABIC_FONT
         self.add_widget(self.status_label)
 
         # Dynamic Response Text Box
         self.info_label = Label(
-            text="Tap button below and start speaking...",
+            text="اضغط على الزر وابدأ بالتحدث...",
             font_size="15sp",
             color=(0.8, 0.8, 0.85, 1),
             halign="center",
             valign="middle",
             size_hint_y=None,
-            height=dp(70)
+            height=dp(100)
         )
+        if ARABIC_FONT:
+            self.info_label.font_name = ARABIC_FONT
         self.info_label.bind(size=self._update_text_size)
         self.add_widget(self.info_label)
 
@@ -254,6 +279,8 @@ class VoiceAssistant811(BoxLayout):
             background_normal="",
             background_color=(0, 0.45, 0.9, 1)
         )
+        if ARABIC_FONT:
+            self.action_button.font_name = ARABIC_FONT
         self.action_button.bind(on_press=self.on_button_click)
         self.add_widget(self.action_button)
 
@@ -323,7 +350,6 @@ class VoiceAssistant811(BoxLayout):
                 @java_method("(I)V")
                 def onInit(self, status):
                     if status == TextToSpeech.SUCCESS:
-                        self.outer.tts_engine.setLanguage(Locale.US)
                         self.outer.tts_ready = True
 
             self.listener = TTSInitListener(self)
@@ -411,20 +437,18 @@ class VoiceAssistant811(BoxLayout):
         if platform == "android" and self.speech_recognizer:
             try:
                 from jnius import autoclass
-                PythonActivity = autoclass("org.kivy.android.PythonActivity")
                 Intent = autoclass("android.content.Intent")
                 RecognizerIntent = autoclass("android.speech.RecognizerIntent")
 
                 intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
 
                 self.speech_recognizer.startListening(intent)
             except Exception as e:
                 self.update_info(f"Start listening error: {e}")
                 self.set_button_disabled(False)
         else:
-            self.on_speech_recognized("Hello, how are you?")
+            self.on_speech_recognized("مرحبا، كيف حالك؟")
 
     def on_button_click(self, instance):
         api_key = self.api_key_input.text.strip()
@@ -438,7 +462,7 @@ class VoiceAssistant811(BoxLayout):
         self.start_listening()
 
     def on_speech_recognized(self, spoken_text):
-        self.update_info(f"You: {spoken_text}")
+        self.update_info(f"أنت: {spoken_text}")
         self.update_status("Thinking...", color=(1, 0.65, 0, 1), state="processing")
         threading.Thread(target=self._run_ai_thread, args=(spoken_text,), daemon=True).start()
 
@@ -446,7 +470,7 @@ class VoiceAssistant811(BoxLayout):
         try:
             result = self.ai_client.ask(user_prompt)
             self.update_status("Speaking...", color=(0.1, 0.85, 0.45, 1), state="speaking")
-            self.update_info(f"You: {user_prompt}\n\nAI: {result}")
+            self.update_info(f"أنت: {user_prompt}\n\nالذكاء الاصطناعي: {result}")
             self.speak_text(result)
         except Exception as e:
             self.update_status("AI Request Failed", color=(1, 0.2, 0.2, 1), state="idle")
