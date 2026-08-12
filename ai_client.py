@@ -1,49 +1,48 @@
 import os
-import requests
+from groq import Groq
 
-class OpenAIClient:
-    def __init__(self, api_key=None):
-        self.api_key = (api_key or os.environ.get("GROQ_API_KEY", "")).strip()
-        # نقطة نهاية Groq المجانية
-        self.url = "https://api.groq.com/openai/v1/chat/completions"
-        self.model = "llama-3.1-8b-instant"
+class AIClient:
+    def __init__(self, api_key):
+        self.client = Groq(api_key=api_key)
+        # 1. إنشاء سجل المحادثة وتحديد تعليمات النظام (System Prompt)
+        self.history = [
+            {
+                "role": "system",
+                "content": (
+                    "أنت مساعد صوتي ذكي ومفيد يتحدث باللغة العربية بطلاقة. "
+                    "إجاباتك يجب أن تكون مختصرة ومباشرة ومناسبة للقراءة الصوتية. "
+                    "تجاهل الأخطاء الإملائية الناتجة عن محول الصوت لنص (STT). "
+                    "لا تستخدم الإيموجي أو التنسيقات الخاصة أو الرموز الغريبة في إجاباتك."
+                )
+            }
+        ]
 
-    def set_api_key(self, api_key):
-        self.api_key = (api_key or "").strip()
-
-    def is_ready(self):
-        return bool(self.api_key)
-
-    def ask(self, text):
-        text = (text or "").strip()
-        if not text:
-            return "No input text."
-        if not self.api_key:
-            return "Groq API key is missing."
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": text}]
-        }
+    def get_response(self, user_text):
         try:
-            response = requests.post(self.url, headers=headers, json=payload, timeout=60)
-            if response.status_code != 200:
-                try:
-                    data = response.json()
-                    message = data.get("error", {}).get("message", response.text)
-                except Exception:
-                    message = response.text
-                return f"Groq API Error: {message}"
-            
-            data = response.json()
-            return data['choices'][0]['message']['content'].strip()
-        except requests.exceptions.Timeout:
-            return "Request timed out."
-        except requests.exceptions.ConnectionError:
-            return "No internet connection."
+            # 2. إضافة نص المستخدم الحالي إلى السجل
+            self.history.append({"role": "user", "content": user_text})
+
+            # 3. الحفاظ على حجم السجل (مثلاً الاحتفاظ بآخر 10 رسائل فقط لتجنب استهلاك الـ Tokens)
+            if len(self.history) > 11:
+                self.history = [self.history[0]] + self.history[-10:]
+
+            # 4. إرسال السجل بالكامل لـ Groq API
+            response = self.client.chat.completions.create(
+                model="llama-3.3-70b-versatile",  # أو النموذج المعين لديك
+                messages=self.history,
+                temperature=0.6,
+            )
+
+            bot_reply = response.choices[0].message.content
+
+            # 5. حفظ رد الذكاء الاصطناعي في السجل
+            self.history.append({"role": "assistant", "content": bot_reply})
+
+            return bot_reply
+
         except Exception as e:
-            return f"Bridge error: {e}"
+            return f"حدث خطأ في الاتصال: {str(e)}"
+
+    def clear_history(self):
+        """دالة لإعادة ضبط المحادثة عند الحاجة"""
+        self.history = [self.history[0]]
