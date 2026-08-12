@@ -18,10 +18,10 @@ source.include_exts = py,png,jpg,kv,atlas,ttf
 # (str) Application versioning
 version = 0.1
 
-# (list) Application requirements (تمت إضافة مكتبات اللغة العربية والشبكة هنا)
+# (list) Application requirements
 requirements = python3,kivy,requests,pyjnius,arabic_reshaper,python-bidi,android
 
-# (list) Permissions (الصوت والإنترنت)
+# (list) Permissions
 android.permissions = RECORD_AUDIO,INTERNET
 
 # (str) Supported orientation
@@ -38,6 +38,9 @@ android.minapi = 21
 
 # (bool) Accept SDK license automatically
 android.accept_sdk_license = True
+
+# (str) python-for-android branch to use
+p4a.branch = master
 
 [buildozer]
 
