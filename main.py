@@ -30,9 +30,9 @@ except ImportError:
 def clean_text(text):
     if not text:
         return ""
-    # 1. إزالة نجوم الماركداون
+    # 1. إزالة علامات الماركداون مثل النجوم
     text = re.sub(r'\*+', '', str(text))
-    # 2. إزالة رموز يونيكود الخفية التي تسبب ظهور المربعات المفرغة
+    # 2. إزالة رموز يونيكود الخفية لمنع ظهور المربعات المفرغة
     text = re.sub(r'[\uE0000-\uE007F\u200B-\u200D\uFEFF\u200e\u200f\u202a-\u202e]', '', text)
     return text.strip()
 
@@ -121,7 +121,6 @@ class VoiceVisualizer(Widget):
         self.anim_time = 0
         self.bar_heights = [0.2, 0.4, 0.6, 0.4, 0.2]
         
-        # Color palettes per state (RGB)
         self.colors = {
             "idle": (0.2, 0.4, 0.9),       # Calm Blue
             "listening": (0.0, 0.75, 1.0),   # Vibrant Cyan
@@ -166,7 +165,6 @@ class VoiceVisualizer(Widget):
         r_col, g_col, b_col = self.colors.get(self.state, (0.2, 0.4, 0.9))
         
         with self.canvas:
-            # 1. Expanding Outer Glow Rings (Ripples)
             for i in range(3):
                 pulse = (self.anim_time * 1.5 + i * 0.5) % 1.5
                 ring_r = base_r + pulse * dp(40)
@@ -174,7 +172,6 @@ class VoiceVisualizer(Widget):
                 Color(r_col, g_col, b_col, alpha)
                 Line(circle=(cx, cy, ring_r), width=dp(2))
 
-            # 2. Outer Soft Aura
             aura_pulse = math.sin(self.anim_time * 3) * dp(6)
             Color(r_col, g_col, b_col, 0.25)
             Ellipse(
@@ -182,14 +179,12 @@ class VoiceVisualizer(Widget):
                 size=((base_r + aura_pulse) * 2, (base_r + aura_pulse) * 2)
             )
 
-            # 3. Main Central Glowing Orb
             Color(r_col, g_col, b_col, 0.9)
             Ellipse(
                 pos=(cx - base_r, cy - base_r),
                 size=(base_r * 2, base_r * 2)
             )
 
-            # 4. Inner Bright Highlight
             Color(1, 1, 1, 0.4)
             highlight_r = base_r * 0.6
             Ellipse(
@@ -197,7 +192,6 @@ class VoiceVisualizer(Widget):
                 size=(highlight_r, highlight_r * 0.7)
             )
 
-            # 5. Dynamic Sound Wave Bars
             bar_width = dp(6)
             gap = dp(5)
             total_w = (5 * bar_width) + (4 * gap)
@@ -226,7 +220,6 @@ class VoiceAssistant811(BoxLayout):
         self.spacing = dp(14)
         self.padding = dp(20)
 
-        # Apply dark background
         with self.canvas.before:
             Color(0.07, 0.07, 0.09, 1)
             self.bg_rect = RoundedRectangle(pos=self.pos, size=self.size)
@@ -237,7 +230,6 @@ class VoiceAssistant811(BoxLayout):
         self.tts_ready = False
         self.speech_recognizer = None
 
-        # App Title Header
         self.title_label = Label(
             text="VOICE ASSISTANT 811",
             font_size="20sp",
@@ -248,7 +240,6 @@ class VoiceAssistant811(BoxLayout):
         )
         self.add_widget(self.title_label)
 
-        # API Key Input
         self.api_key_input = TextInput(
             hint_text="Paste Groq API Key here...",
             multiline=False,
@@ -264,13 +255,11 @@ class VoiceAssistant811(BoxLayout):
         )
         self.add_widget(self.api_key_input)
 
-        # Voice Visualizer Hero Element
         self.visualizer = VoiceVisualizer(
             size_hint=(1, 1)
         )
         self.add_widget(self.visualizer)
 
-        # Status Badge
         self.status_label = Label(
             text="Status: Ready",
             font_size="15sp",
@@ -281,7 +270,7 @@ class VoiceAssistant811(BoxLayout):
         )
         self.add_widget(self.status_label)
 
-        # Scrollable Dynamic Response Text Box
+        # إضافة ScrollView لدعم تمرير النصوص الطويلة
         self.scroll_view = ScrollView(
             size_hint=(1, None),
             height=dp(120),
@@ -304,7 +293,6 @@ class VoiceAssistant811(BoxLayout):
         self.scroll_view.add_widget(self.info_label)
         self.add_widget(self.scroll_view)
 
-        # Action Control Button
         self.action_button = Button(
             text="Tap to Speak",
             font_size="17sp",
@@ -338,7 +326,6 @@ class VoiceAssistant811(BoxLayout):
     @mainthread
     def update_info(self, text):
         self.info_label.text = fix_text(str(text))
-        # إعادة التمرير للبداية عند إضافة نص جديد
         self.scroll_view.scroll_y = 1.0
 
     @mainthread
@@ -465,7 +452,6 @@ class VoiceAssistant811(BoxLayout):
                 TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
                 HashMap = autoclass("java.util.HashMap")
                 params = HashMap()
-                # تنظيف النص قبل نطق النطق الصوتي
                 clean_speech_text = clean_text(text)
                 self.tts_engine.speak(str(clean_speech_text), TextToSpeech.QUEUE_FLUSH, params)
             except Exception as e:
