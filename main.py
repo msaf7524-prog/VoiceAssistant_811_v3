@@ -30,23 +30,23 @@ except ImportError:
 def clean_text(text):
     if not text:
         return ""
-    # 1. إزالة علامات الماركداون مثل النجوم
-    text = re.sub(r'\*+', '', str(text))
-    # 2. إزالة رموز يونيكود الخفية لمنع ظهور المربعات المفرغة
-    text = re.sub(r'[\uE0000-\uE007F\u200B-\u200D\uFEFF\u200e\u200f\u202a-\u202e]', '', text)
+    text = str(text)
+    # إزالة رموز الماركداون والرموز الخفية التي تسبب ظهور المربعات
+    text = text.replace('*', '').replace('`', '').replace('#', '')
+    text = re.sub(r'[\u200B-\u200D\uFEFF\u200e\u200f\u202a-\u202e\uE000-\uF8FF]', '', text)
     return text.strip()
 
 def fix_text(text):
     if not text:
         return ""
-    cleaned_text = clean_text(text)
+    cleaned = clean_text(text)
     if HAS_BIDI:
         try:
-            reshaped = arabic_reshaper.reshape(cleaned_text)
+            reshaped = arabic_reshaper.reshape(cleaned)
             return get_display(reshaped)
         except Exception:
-            return cleaned_text
-    return cleaned_text
+            return cleaned
+    return cleaned
 
 if platform == "android":
     from android.runnable import run_on_ui_thread
@@ -100,7 +100,7 @@ class GroqClient:
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
-                {"role": "system", "content": "You are a helpful voice assistant. Respond in the same language as the user input (Arabic or English). Keep answers short, concise, and natural for speech output."},
+                {"role": "system", "content": "You are a helpful voice assistant. Respond in plain text without Markdown, stars, or formatting. Keep answers short, concise, and natural for speech output."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7
@@ -167,12 +167,12 @@ class VoiceVisualizer(Widget):
         with self.canvas:
             for i in range(3):
                 pulse = (self.anim_time * 1.5 + i * 0.5) % 1.5
-                ring_r = base_r + pulse * dp(40)
+                ring_r = base_r + pulse * dp(30)
                 alpha = max(0, 1.0 - (pulse / 1.5)) * 0.35
                 Color(r_col, g_col, b_col, alpha)
                 Line(circle=(cx, cy, ring_r), width=dp(2))
 
-            aura_pulse = math.sin(self.anim_time * 3) * dp(6)
+            aura_pulse = math.sin(self.anim_time * 3) * dp(5)
             Color(r_col, g_col, b_col, 0.25)
             Ellipse(
                 pos=(cx - (base_r + aura_pulse), cy - (base_r + aura_pulse)),
@@ -192,21 +192,21 @@ class VoiceVisualizer(Widget):
                 size=(highlight_r, highlight_r * 0.7)
             )
 
-            bar_width = dp(6)
-            gap = dp(5)
+            bar_width = dp(5)
+            gap = dp(4)
             total_w = (5 * bar_width) + (4 * gap)
             start_x = cx - (total_w / 2)
-            max_bar_h = base_r * 1.1
+            max_bar_h = base_r * 1.0
 
             Color(1, 1, 1, 0.95)
             for i, h_factor in enumerate(self.bar_heights):
-                bar_h = max(dp(8), max_bar_h * h_factor)
+                bar_h = max(dp(6), max_bar_h * h_factor)
                 bx = start_x + i * (bar_width + gap)
                 by = cy - (bar_h / 2)
                 RoundedRectangle(
                     pos=(bx, by),
                     size=(bar_width, bar_h),
-                    radius=[dp(3)]
+                    radius=[dp(2)]
                 )
 
 
@@ -217,8 +217,8 @@ class VoiceAssistant811(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
-        self.spacing = dp(14)
-        self.padding = dp(20)
+        self.spacing = dp(10)
+        self.padding = dp(16)
 
         with self.canvas.before:
             Color(0.07, 0.07, 0.09, 1)
@@ -230,24 +230,26 @@ class VoiceAssistant811(BoxLayout):
         self.tts_ready = False
         self.speech_recognizer = None
 
+        # 1. العنوان
         self.title_label = Label(
             text="VOICE ASSISTANT 811",
-            font_size="20sp",
+            font_size="18sp",
             bold=True,
             color=(0.9, 0.9, 0.95, 1),
             size_hint_y=None,
-            height=dp(35)
+            height=dp(30)
         )
         self.add_widget(self.title_label)
 
+        # 2. حقل أدخال API Key
         self.api_key_input = TextInput(
             hint_text="Paste Groq API Key here...",
             multiline=False,
             password=True,
-            font_size="14sp",
+            font_size="13sp",
             size_hint_y=None,
-            height=dp(46),
-            padding=[dp(12), dp(12)],
+            height=dp(42),
+            padding=[dp(10), dp(10)],
             background_color=(0.15, 0.15, 0.18, 1),
             foreground_color=(1, 1, 1, 1),
             cursor_color=(0, 0.75, 1, 1),
@@ -255,32 +257,34 @@ class VoiceAssistant811(BoxLayout):
         )
         self.add_widget(self.api_key_input)
 
+        # 3. الكرة التفاعلية
         self.visualizer = VoiceVisualizer(
-            size_hint=(1, 1)
+            size_hint_y=None,
+            height=dp(170)
         )
         self.add_widget(self.visualizer)
 
+        # 4. حالة النظام
         self.status_label = Label(
-            text="Status: Ready",
-            font_size="15sp",
+            text="Ready",
+            font_size="14sp",
             bold=True,
             size_hint_y=None,
-            height=dp(28),
+            height=dp(25),
             color=(0, 0.75, 1, 1)
         )
         self.add_widget(self.status_label)
 
-        # إضافة ScrollView لدعم تمرير النصوص الطويلة
+        # 5. منطقة عرض النصوص
         self.scroll_view = ScrollView(
-            size_hint=(1, None),
-            height=dp(120),
+            size_hint=(1, 1),
             do_scroll_x=False,
             do_scroll_y=True
         )
         self.info_label = Label(
-            text=fix_text("اضغط على الزر وابدأ بالتحدث..."),
-            font_size="15sp",
-            color=(0.8, 0.8, 0.85, 1),
+            text=fix_text("..."),
+            font_size="14sp",
+            color=(0.85, 0.85, 0.9, 1),
             halign="center",
             valign="middle",
             size_hint_y=None
@@ -293,12 +297,13 @@ class VoiceAssistant811(BoxLayout):
         self.scroll_view.add_widget(self.info_label)
         self.add_widget(self.scroll_view)
 
+        # 6. زر التشغيل
         self.action_button = Button(
             text="Tap to Speak",
-            font_size="17sp",
+            font_size="16sp",
             bold=True,
             size_hint_y=None,
-            height=dp(54),
+            height=dp(50),
             background_normal="",
             background_color=(0, 0.45, 0.9, 1)
         )
@@ -315,7 +320,7 @@ class VoiceAssistant811(BoxLayout):
         instance.text_size = (value[0], None)
 
     def _update_label_height(self, instance, value):
-        instance.height = max(value[1], dp(120))
+        instance.height = max(value[1], self.scroll_view.height)
 
     @mainthread
     def update_status(self, text, color=(1, 1, 1, 1), state="idle"):
@@ -339,7 +344,7 @@ class VoiceAssistant811(BoxLayout):
             self._init_tts()
             self._init_stt()
         else:
-            self.update_status("Status: Ready (Desktop)", state="idle")
+            self.update_status("Ready (Desktop)", state="idle")
             self.update_info("System initialized.")
 
     def request_android_permissions(self):
@@ -347,15 +352,14 @@ class VoiceAssistant811(BoxLayout):
             from android.permissions import request_permissions, check_permission, Permission
             def permission_callback(permissions, results):
                 if all(results):
-                    self.update_status("Status: Permissions Granted", color=(0, 1, 0, 1), state="idle")
+                    self.update_status("Permissions Granted", color=(0, 1, 0, 1), state="idle")
                 else:
-                    self.update_status("Status: Permission Denied", color=(1, 0, 0, 1), state="idle")
+                    self.update_status("Permission Denied", color=(1, 0, 0, 1), state="idle")
 
             if not check_permission(Permission.RECORD_AUDIO):
                 request_permissions([Permission.RECORD_AUDIO], permission_callback)
             else:
-                self.update_status("Status: Ready", color=(0, 0.75, 1, 1), state="idle")
-                self.update_info("System initialized. Press button to speak.")
+                self.update_status("Ready", color=(0, 0.75, 1, 1), state="idle")
         except Exception as e:
             self.update_info(f"Permission error: {e}")
 
@@ -364,6 +368,7 @@ class VoiceAssistant811(BoxLayout):
             from jnius import autoclass, PythonJavaClass, java_method
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
+            Locale = autoclass("java.util.Locale")
 
             class TTSInitListener(PythonJavaClass):
                 __javainterfaces__ = ["android/speech/tts/TextToSpeech$OnInitListener"]
@@ -374,6 +379,10 @@ class VoiceAssistant811(BoxLayout):
                 @java_method("(I)V")
                 def onInit(self, status):
                     if status == TextToSpeech.SUCCESS:
+                        try:
+                            self.outer.tts_engine.setLanguage(Locale("ar"))
+                        except Exception:
+                            pass
                         self.outer.tts_ready = True
 
             self.listener = TTSInitListener(self)
@@ -413,11 +422,11 @@ class VoiceAssistant811(BoxLayout):
 
                 @java_method("()V")
                 def onEndOfSpeech(self):
-                    self.outer.update_status("Processing speech...", color=(1, 0.65, 0, 1), state="processing")
+                    self.outer.update_status("Thinking...", color=(1, 0.65, 0, 1), state="processing")
 
                 @java_method("(I)V")
                 def onError(self, error):
-                    self.outer.update_status(f"STT Error code: {error}", color=(1, 0.2, 0.2, 1), state="idle")
+                    self.outer.update_status(f"Error code: {error}", color=(1, 0.2, 0.2, 1), state="idle")
                     self.outer.set_button_disabled(False)
 
                 @java_method("(Landroid/os/Bundle;)V")
@@ -467,6 +476,8 @@ class VoiceAssistant811(BoxLayout):
 
                 intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA")
+                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-SA")
 
                 self.speech_recognizer.startListening(intent)
             except Exception as e:
