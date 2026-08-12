@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
@@ -8,19 +9,19 @@ from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 from kivy.uix.scrollview import ScrollView
 from kivy.clock import Clock
-from kivy.graphics import Color, Ellipse, Line, Rectangle, RoundedRectangle
+from kivy.graphics import Color, Ellipse, Rectangle, RoundedRectangle
 
 import arabic_reshaper
 from bidi.algorithm import get_display
 
-# دالة تنظيف النص من الرموز الخفية (Unicode Tags) التي تسبب ظهور المربعات
-def clean_arabic_text(text):
+# دالة تنظيف النص من المربعات المفرغة مع الحفاظ على النص العربي كاملاً
+def fix_arabic_text(text):
     if not text:
         return ""
-    # إزالة رموز التنسيق غير المطبوعة ورموز Unicode الخفية التي يرسلها الذكاء الاصطناعي
-    text = re.sub(r'[\uE0000-\uE007F\u200B-\u200D\uFEFF\u200e\u200f\u202a-\u202e]', '', text)
-    reshaped_text = arabic_reshaper.reshape(text)
-    return get_display(reshaped_text)
+    # إزالة رموز Unicode غير المطبوعة التي تسبب ظهور المربعات
+    cleaned = re.sub(r'[\uE0000-\uE007F\u200B-\u200D\uFEFF\u200e\u200f\u202a-\u202e]', '', text)
+    reshaped = arabic_reshaper.reshape(cleaned)
+    return get_display(reshaped)
 
 class VoiceAssistantUI(BoxLayout):
     def __init__(self, **kwargs):
@@ -32,7 +33,7 @@ class VoiceAssistantUI(BoxLayout):
             self.bg_rect = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._update_bg, size=self._update_bg)
 
-        # 1. العنوان الرئيسي
+        # 1. العنوان
         self.add_widget(Label(
             text="VOICE ASSISTANT 811",
             font_size='22sp',
@@ -56,34 +57,29 @@ class VoiceAssistantUI(BoxLayout):
         )
         self.add_widget(self.api_input)
 
-        # 3. العنصر البصري الدائري (المحاكي للتصميم السابق)
-        self.visualizer = FloatLayout(size_hint=(1, None), height=220)
+        # 3. التصميم الدائري المركزي الناجح
+        self.visualizer = FloatLayout(size_hint=(1, None), height=200)
         with self.visualizer.canvas:
-            # الحلقة الخارجية الأولى
             Color(0.08, 0.25, 0.4, 0.3)
-            self.ring2 = Ellipse(size=(210, 210))
+            self.ring2 = Ellipse(size=(190, 190))
             
-            # الحلقة الخارجية الثانية
             Color(0.1, 0.35, 0.55, 0.5)
-            self.ring1 = Ellipse(size=(170, 170))
+            self.ring1 = Ellipse(size=(150, 150))
 
-            # الدائرة المركزية
-            self.circle_color = Color(0.0, 0.68, 0.94, 1) # أزرق فاتح
-            self.core_circle = Ellipse(size=(130, 130))
+            self.core_circle = Ellipse(size=(110, 110))
 
-            # خطوط الموجه الصوتية الداخلية (Wave lines)
             Color(1, 1, 1, 0.9)
-            self.bar1 = RoundedRectangle(size=(6, 35), radius=[3])
-            self.bar2 = RoundedRectangle(size=(6, 55), radius=[3])
-            self.bar3 = RoundedRectangle(size=(6, 40), radius=[3])
-            self.bar4 = RoundedRectangle(size=(6, 25), radius=[3])
+            self.bar1 = RoundedRectangle(size=(5, 30), radius=[2])
+            self.bar2 = RoundedRectangle(size=(5, 48), radius=[2])
+            self.bar3 = RoundedRectangle(size=(5, 35), radius=[2])
+            self.bar4 = RoundedRectangle(size=(5, 20), radius=[2])
 
         self.visualizer.bind(pos=self._update_visualizer, size=self._update_visualizer)
         self.add_widget(self.visualizer)
 
-        # 4. نص حالة المساعد
+        # 4. حالة النظام
         self.status_label = Label(
-            text="Listening...",
+            text="Ready",
             font_size='16sp',
             bold=True,
             color=(0.0, 0.75, 1, 1),
@@ -92,10 +88,10 @@ class VoiceAssistantUI(BoxLayout):
         )
         self.add_widget(self.status_label)
 
-        # 5. حاوية عرض المحادثة المقاومة للقطع والمتداخلة مع دعم التمرير (ScrollView)
+        # 5. عرض المحادثة النصية مع التمرير
         self.scroll_view = ScrollView(size_hint=(1, 1), do_scroll_x=False)
         self.chat_label = Label(
-            text=clean_arabic_text("مرحباً بك! اضغط للتحدث."),
+            text=fix_arabic_text("مرحباً بك! اضغط للتحدث."),
             font_size='16sp',
             color=(0.9, 0.9, 0.9, 1),
             size_hint_y=None,
@@ -104,11 +100,10 @@ class VoiceAssistantUI(BoxLayout):
         )
         self.chat_label.bind(texture_size=self._update_chat_height)
         self.bind(width=self._update_chat_width)
-        
         self.scroll_view.add_widget(self.chat_label)
         self.add_widget(self.scroll_view)
 
-        # 6. زر التحدث السفلي
+        # 6. زر التحدث
         self.speak_button = Button(
             text="Tap to Speak",
             font_size='18sp',
@@ -118,6 +113,7 @@ class VoiceAssistantUI(BoxLayout):
             background_color=(0.0, 0.48, 0.95, 1),
             background_normal=''
         )
+        self.speak_button.bind(on_press=self.start_voice_process)
         self.add_widget(self.speak_button)
 
     def _update_bg(self, instance, value):
@@ -128,15 +124,14 @@ class VoiceAssistantUI(BoxLayout):
         cx = instance.x + instance.width / 2
         cy = instance.y + instance.height / 2
 
-        self.ring2.pos = (cx - 105, cy - 105)
-        self.ring1.pos = (cx - 85, cy - 85)
-        self.core_circle.pos = (cx - 65, cy - 65)
+        self.ring2.pos = (cx - 95, cy - 95)
+        self.ring1.pos = (cx - 75, cy - 75)
+        self.core_circle.pos = (cx - 55, cy - 55)
 
-        # موقع أعمدة الموجه الصوتية
-        self.bar1.pos = (cx - 20, cy - 17.5)
-        self.bar2.pos = (cx - 7, cy - 27.5)
-        self.bar3.pos = (cx + 6, cy - 20)
-        self.bar4.pos = (cx + 19, cy - 12.5)
+        self.bar1.pos = (cx - 16, cy - 15)
+        self.bar2.pos = (cx - 5, cy - 24)
+        self.bar3.pos = (cx + 6, cy - 17)
+        self.bar4.pos = (cx + 17, cy - 10)
 
     def _update_chat_height(self, instance, value):
         instance.height = max(value[1] + 20, self.scroll_view.height)
@@ -145,16 +140,30 @@ class VoiceAssistantUI(BoxLayout):
     def _update_chat_width(self, instance, value):
         self.chat_label.text_size = (value - 30, None)
 
-    def update_chat_text(self, text):
-        cleaned = clean_arabic_text(text)
-        Clock.schedule_once(lambda dt: setattr(self.chat_label, 'text', cleaned))
+    def set_chat_text(self, text):
+        cleaned_text = fix_arabic_text(text)
+        Clock.schedule_once(lambda dt: setattr(self.chat_label, 'text', cleaned_text))
 
-    def update_status(self, text, color=(0.0, 0.75, 1, 1)):
-        Clock.schedule_once(lambda dt: self._set_status(text, color))
+    def set_status(self, status_text, color=(0.0, 0.75, 1, 1)):
+        Clock.schedule_once(lambda dt: self._apply_status(status_text, color))
 
-    def _set_status(self, text, color):
-        self.status_label.text = text
+    def _apply_status(self, status_text, color):
+        self.status_label.text = status_text
         self.status_label.color = color
+
+    def start_voice_process(self, instance):
+        # تشغيل الاستماع في المسار الخلفي
+        threading.Thread(target=self._run_voice_logic, daemon=True).start()
+
+    def _run_voice_logic(self):
+        # هذا الجزء يستدعي محرك الصوت و API الخاص بك
+        self.set_status("Listening...", color=(0, 0.8, 1, 1))
+        
+        # عند استلام الرد من الذكاء الاصطناعي يتم تمريره لـ set_chat_text
+        # مثال للتوضيح التنفيذي:
+        # response = call_groq_api(...)
+        # self.set_chat_text(response)
+        # self.set_status("Speaking...", color=(0.2, 1, 0.2, 1))
 
 class VoiceApp(App):
     def build(self):
