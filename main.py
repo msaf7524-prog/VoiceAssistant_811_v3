@@ -79,11 +79,13 @@ ARABIC_FONT = get_arabic_font()
 # ==========================================
 class GroqClient:
     def __init__(self, api_key=""):
-        self.api_key = api_key.strip()
+        self.set_api_key(api_key)
         self.url = "https://api.groq.com/openai/v1/chat/completions"
 
     def set_api_key(self, api_key):
-        self.api_key = api_key.strip()
+        # تنظيف المفتاح من أي نقطتين : أو رموش زوائد في البداية والنهاية
+        clean_key = re.sub(r'^[^\w]+', '', api_key.strip())
+        self.api_key = clean_key
 
     @property
     def is_ready(self):
@@ -100,7 +102,7 @@ class GroqClient:
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
-                {"role": "system", "content": "You are a helpful voice assistant. Respond in plain text without Markdown, stars, or formatting. Keep answers short, concise, and natural for speech output."},
+                {"role": "system", "content": "You are a helpful voice assistant named 811. Respond in plain text without Markdown, stars, or formatting. Keep answers short, concise, natural for speech output, and in Arabic."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7
@@ -426,7 +428,12 @@ class VoiceAssistant811(BoxLayout):
 
                 @java_method("(I)V")
                 def onError(self, error):
-                    self.outer.update_status(f"Error code: {error}", color=(1, 0.2, 0.2, 1), state="idle")
+                    # معالجة الخطأ 7 والتعبير عنه بعبارة واضحة
+                    if error == 7:
+                        msg = "لم يتم التقاط صوت، تكلم فور الضغط"
+                    else:
+                        msg = f"Error code: {error}"
+                    self.outer.update_status(msg, color=(1, 0.3, 0.3, 1), state="idle")
                     self.outer.set_button_disabled(False)
 
                 @java_method("(Landroid/os/Bundle;)V")
@@ -437,7 +444,7 @@ class VoiceAssistant811(BoxLayout):
                         spoken_text = matches.get(0)
                         self.outer.on_speech_recognized(spoken_text)
                     else:
-                        self.outer.update_status("No speech heard", color=(1, 0.3, 0.3, 1), state="idle")
+                        self.outer.update_status("لم يتم سماع كلام", color=(1, 0.3, 0.3, 1), state="idle")
                         self.outer.set_button_disabled(False)
 
                 @java_method("(Landroid/os/Bundle;)V")
@@ -478,6 +485,11 @@ class VoiceAssistant811(BoxLayout):
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA")
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-SA")
+                
+                # إعدادات إضافية لمنع إغلاق المايك السريع (حل مشكلة Error 7)
+                intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 5000)
+                intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 5000)
+                intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 3000)
 
                 self.speech_recognizer.startListening(intent)
             except Exception as e:
@@ -487,12 +499,15 @@ class VoiceAssistant811(BoxLayout):
             self.on_speech_recognized("مرحبا، كيف حالك؟")
 
     def on_button_click(self, instance):
-        api_key = self.api_key_input.text.strip()
-        if not api_key:
+        # الحصول على المفتاح وتنظيفه فوراً
+        raw_key = self.api_key_input.text.strip()
+        cleaned_key = re.sub(r'^[^\w]+', '', raw_key)
+        
+        if not cleaned_key:
             self.update_status("Error: Paste API Key", color=(1, 0.2, 0.2, 1), state="idle")
             return
 
-        self.ai_client.set_api_key(api_key)
+        self.ai_client.set_api_key(cleaned_key)
         self.set_button_disabled(True)
         self.update_status("Listening...", color=(0, 0.75, 1, 1), state="listening")
         self.start_listening()
