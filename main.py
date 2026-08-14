@@ -13,6 +13,19 @@ from kivy.uix.slider import Slider
 from kivy.clock import Clock
 from kivy.utils import platform
 
+# تحديد خط عربي مدمج في أندرويد لحل مشكلة المربعات ()
+ARABIC_FONT = None
+if platform == 'android':
+    font_paths = [
+        "/system/fonts/NotoNaskhArabic-Regular.ttf",
+        "/system/fonts/NotoSansArabic-Regular.ttf",
+        "/system/fonts/DroidSansArabic.ttf"
+    ]
+    for p in font_paths:
+        if os.path.exists(p):
+            ARABIC_FONT = p
+            break
+
 # استدعاء مكتبات الأندرويد لربط العتاد عبر PyJnius
 if platform == 'android':
     from jnius import autoclass, PythonJavaClass, java_method
@@ -27,6 +40,21 @@ if platform == 'android':
     AudioManager = autoclass('android.media.AudioManager')
     PowerManager = autoclass('android.os.PowerManager')
     Bundle = autoclass('android.os.Bundle')
+
+    # فئة لتشغيل الأوامر داخل Android Main UI Thread لمنع العطل
+    class RunnableTask(PythonJavaClass):
+        __javainterfaces__ = ['java/lang/Runnable']
+
+        def __init__(self, func):
+            super().__init__()
+            self.func = func
+
+        @java_method('()V')
+        def run(self):
+            self.func()
+
+    def run_on_ui_thread(func):
+        PythonActivity.mActivity.runOnUiThread(RunnableTask(func))
 
     # 1. مستمع الاستماع مع خاصية التعافي وقاطع الحديث
     class SpeechListener(PythonJavaClass):
@@ -54,7 +82,6 @@ if platform == 'android':
 
         @java_method('(I)V')
         def onError(self, error):
-            # إعادة تشغيل الاستماع تلقائياً عند انشغال المايك
             Clock.schedule_once(lambda dt: self.app.restart_listening(), 1.5)
 
         @java_method('(Landroid/os/Bundle;)V')
@@ -68,7 +95,6 @@ if platform == 'android':
 
         @java_method('(Landroid/os/Bundle;)V')
         def onPartialResults(self, partialResults):
-            # التقاط الكلمات أثناء كلام المساعد لإيقافه (Barge-In)
             matches = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             if matches and matches.size() > 0:
                 text = matches.get(0).lower()
@@ -117,8 +143,8 @@ if platform == 'android':
 class VoiceAssistantApp(App):
     def build(self):
         # 🔑 مفاتيح API الخاصة بك:
-        self.gemini_api_key = "AQ.Ab8RN6KkUgKsAetuELPjj2IvhP6zWXTXtu8tkv3sCWDeoSBpLg" # مفتاح Google AI Studio (الأول والأحدث)
-        self.groq_api_key = "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"            # مفتاح GroqCloud (الاحتياطي)
+        self.gemini_api_key = "AQ.Ab8RN6KKUg...sCwDeoSBpLg" # مفتاح Gemini الأول والأحدث
+        self.groq_api_key ="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"            # مفتاح Groq الاحتياطي
         
         self.is_speaking = False
         self.is_6hour_active = False
@@ -146,6 +172,7 @@ class VoiceAssistantApp(App):
         self.status_label = Label(
             text="في انتظار مناداة [811] أو [يا مساعد]...",
             font_size='16sp',
+            font_name=ARABIC_FONT,
             color=(0.3, 0.7, 1, 1),
             pos_hint={'center_x': 0.5, 'center_y': 0.7},
             size_hint=(0.9, 0.1)
@@ -160,6 +187,7 @@ class VoiceAssistantApp(App):
         self.chat_label = Label(
             text="",
             font_size='15sp',
+            font_name=ARABIC_FONT,
             color=(0.9, 0.9, 0.9, 1),
             size_hint_y=None,
             halign='right',
@@ -170,7 +198,7 @@ class VoiceAssistantApp(App):
         scroll.add_widget(self.chat_label)
         root.add_widget(scroll)
 
-        # شريط الأزرار السفلي العصري (زران فقط في الأسفل)
+        # شريط الأزرار السفلي
         bottom_bar = BoxLayout(
             orientation='horizontal',
             size_hint=(1, 0.1),
@@ -181,7 +209,8 @@ class VoiceAssistantApp(App):
 
         # الزر الأول: تفعيل 6 ساعات
         self.btn_6hours = Button(
-            text="⏱️ تفعيل 6 ساعات",
+            text="تفعيل 6 ساعات",
+            font_name=ARABIC_FONT,
             size_hint=(0.65, 1),
             background_normal='',
             background_color=(0.0, 0.47, 0.84, 1),
@@ -192,7 +221,8 @@ class VoiceAssistantApp(App):
 
         # الزر الثاني: الإعدادات
         self.btn_settings = Button(
-            text="⚙️ الإعدادات",
+            text="الإعدادات",
+            font_name=ARABIC_FONT,
             size_hint=(0.35, 1),
             background_normal='',
             background_color=(0.17, 0.17, 0.18, 1),
@@ -212,27 +242,30 @@ class VoiceAssistantApp(App):
 
     def init_android_system(self):
         if platform == 'android':
-            try:
-                activity = PythonActivity.mActivity
-                
-                # 1. إعداد الصوت والبلوتوث
-                self.audio_manager = activity.getSystemService(Context.AUDIO_SERVICE)
-                if self.audio_manager.isBluetoothA2dpOn() or self.audio_manager.isBluetoothScoAvailableOffCall():
-                    self.audio_manager.startBluetoothSco()
-                    self.audio_manager.setBluetoothScoOn(True)
+            def _init():
+                try:
+                    activity = PythonActivity.mActivity
+                    
+                    # 1. إعداد الصوت والبلوتوث
+                    self.audio_manager = activity.getSystemService(Context.AUDIO_SERVICE)
+                    if self.audio_manager.isBluetoothA2dpOn() or self.audio_manager.isBluetoothScoAvailableOffCall():
+                        self.audio_manager.startBluetoothSco()
+                        self.audio_manager.setBluetoothScoOn(True)
 
-                # 2. قفل منع خمول المعالج (WakeLock)
-                power_manager = activity.getSystemService(Context.POWER_SERVICE)
-                self.wake_lock = power_manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Voice811::Lock")
+                    # 2. قفل منع خمول المعالج (WakeLock)
+                    power_manager = activity.getSystemService(Context.POWER_SERVICE)
+                    self.wake_lock = power_manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Voice811::Lock")
 
-                # 3. تهيئة TTS والاستماع
-                self.tts = TextToSpeech(activity, TTSInitListener(self))
-                self.speech_recognizer = SpeechRecognizer.createSpeechRecognizer(activity)
-                self.speech_recognizer.setRecognitionListener(SpeechListener(self))
-                
-                self.restart_listening()
-            except Exception as e:
-                self.update_status(f"خطأ العتاد: {str(e)}")
+                    # 3. تهيئة TTS والاستماع داخل Main UI Thread
+                    self.tts = TextToSpeech(activity, TTSInitListener(self))
+                    self.speech_recognizer = SpeechRecognizer.createSpeechRecognizer(activity)
+                    self.speech_recognizer.setRecognitionListener(SpeechListener(self))
+                    
+                    self.restart_listening()
+                except Exception as e:
+                    self.update_status(f"خطأ العتاد: {str(e)}")
+
+            run_on_ui_thread(_init)
 
     def update_status(self, text):
         self.status_label.text = text
@@ -242,19 +275,21 @@ class VoiceAssistantApp(App):
 
     def restart_listening(self):
         if platform == 'android' and self.speech_recognizer:
-            try:
-                self.speech_recognizer.cancel()
-                intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA")
-                intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, True)
-                self.speech_recognizer.startListening(intent)
-                self.update_status("أسمعك الآن... تفضل بسؤالك")
-            except Exception as e:
-                Clock.schedule_once(lambda dt: self.restart_listening(), 2)
+            def _start():
+                try:
+                    self.speech_recognizer.cancel()
+                    intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA")
+                    intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, True)
+                    self.speech_recognizer.startListening(intent)
+                    self.update_status("أسمعك الآن... تفضل بسؤالك")
+                except Exception as e:
+                    Clock.schedule_once(lambda dt: self.restart_listening(), 2)
+
+            run_on_ui_thread(_start)
 
     def check_barge_in(self, partial_text):
-        """إيقاف المساعد عن الكلام فور قول 811 أو توقف"""
         if self.is_speaking and ("811" in partial_text or "توقف" in partial_text or "ثمن ميه" in partial_text):
             if platform == 'android' and self.tts:
                 self.tts.stop()
@@ -271,12 +306,11 @@ class VoiceAssistantApp(App):
         threading.Thread(target=self.query_dual_ai, args=(user_text,)).start()
 
     def query_dual_ai(self, prompt):
-        """الاستعلام الذكي: Gemini 2.0 Flash أولاً للمعلومات الحديثة، ثم Groq كاحتياطي سريع"""
         Clock.schedule_once(lambda dt: self.update_status("جاري التفكير والتوليد..."))
         
         system_instruction = "أنت مساعد صوتي ذكي اسمه 811. أجب بإيجاز ووضوح باللهجة العراقية أو العربية الفصحى البسيطة."
         
-        # --- المحاولة الأولى: Google AI Studio / Gemini (النموذج الأحدث) ---
+        # 1. Gemini (الأحدث)
         try:
             gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
             headers = {'Content-Type': 'application/json'}
@@ -291,9 +325,9 @@ class VoiceAssistantApp(App):
                 Clock.schedule_once(lambda dt: self.speak_out(answer))
                 return
         except Exception as e:
-            print(f"Gemini API Error: {e}, Switching to Groq...")
+            print(f"Gemini API Error: {e}")
 
-        # --- المحاولة الثانية: Groq Cloud (الاحتياطي السريع) ---
+        # 2. Groq (الاحتياطي)
         try:
             groq_url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {
@@ -318,7 +352,6 @@ class VoiceAssistantApp(App):
         except Exception as e:
             print(f"Groq API Error: {e}")
 
-        # في حال فشل السيرفرين معاً
         Clock.schedule_once(lambda dt: self.speak_out("عذراً، متعذر الاتصال بالسيرفرات حالياً"))
 
     def speak_out(self, text):
@@ -345,7 +378,7 @@ class VoiceAssistantApp(App):
             hrs = self.remaining_seconds // 3600
             mins = (self.remaining_seconds % 3600) // 60
             secs = self.remaining_seconds % 60
-            self.btn_6hours.text = f"⏳ نشط: {hrs:02d}:{mins:02d}:{secs:02d}"
+            self.btn_6hours.text = f"نشط: {hrs:02d}:{mins:02d}:{secs:02d}"
         else:
             self.stop_6hour_mode()
 
@@ -353,19 +386,19 @@ class VoiceAssistantApp(App):
         self.is_6hour_active = False
         Clock.unschedule(self.update_timer)
         self.remaining_seconds = 6 * 3600
-        self.btn_6hours.text = "⏱️ تفعيل 6 ساعات"
+        self.btn_6hours.text = "تفعيل 6 ساعات"
         self.btn_6hours.background_color = (0.0, 0.47, 0.84, 1)
         if self.wake_lock and self.wake_lock.isHeld():
             self.wake_lock.release()
 
     def open_settings(self, instance):
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        content.add_widget(Label(text="حساسية المايكروفون:"))
+        content.add_widget(Label(text="حساسية المايكروفون:", font_name=ARABIC_FONT))
         content.add_widget(Slider(min=0, max=100, value=80))
-        btn_close = Button(text="إغلاق الإعدادات", size_hint=(1, 0.3))
+        btn_close = Button(text="إغلاق الإعدادات", font_name=ARABIC_FONT, size_hint=(1, 0.3))
         content.add_widget(btn_close)
         
-        popup = Popup(title="⚙️ إعدادات المساعد 811", content=content, size_hint=(0.8, 0.5))
+        popup = Popup(title="إعدادات المساعد 811", title_font=ARABIC_FONT, content=content, size_hint=(0.8, 0.5))
         btn_close.bind(on_press=popup.dismiss)
         popup.open()
 
