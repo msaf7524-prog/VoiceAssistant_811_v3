@@ -54,7 +54,7 @@ if platform == 'android':
 
         @java_method('(I)V')
         def onError(self, error):
-            # إعادة تشغيل الاستماع تلقائياً عند انشغال المايك (مثل تسجيل الشاشة)
+            # إعادة تشغيل الاستماع تلقائياً عند انشغال المايك
             Clock.schedule_once(lambda dt: self.app.restart_listening(), 1.5)
 
         @java_method('(Landroid/os/Bundle;)V')
@@ -116,8 +116,9 @@ if platform == 'android':
 
 class VoiceAssistantApp(App):
     def build(self):
-        # ضع مفتاح API الخاص بك هنا
-        self.api_key = "AQ.Ab8RN6KkUgKsAetuELPjj2IvhP6zWXTXtu8tkv3sCWDeoSBpLg"
+        # 🔑 مفاتيح API الخاصة بك:
+        self.gemini_api_key = "AQ.Ab8RN6KkUgKsAetuELPjj2IvhP6zWXTXtu8tkv3sCWDeoSBpLg" # مفتاح Google AI Studio (الأول والأحدث)
+        self.groq_api_key = "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"            # مفتاح GroqCloud (الاحتياطي)
         
         self.is_speaking = False
         self.is_6hour_active = False
@@ -169,7 +170,7 @@ class VoiceAssistantApp(App):
         scroll.add_widget(self.chat_label)
         root.add_widget(scroll)
 
-        # شريط الأزرار السفلي العصري
+        # شريط الأزرار السفلي العصري (زران فقط في الأسفل)
         bottom_bar = BoxLayout(
             orientation='horizontal',
             size_hint=(1, 0.1),
@@ -267,26 +268,58 @@ class VoiceAssistantApp(App):
             self.speak_out("تفضل أسمعك...")
             return
 
-        threading.Thread(target=self.query_gemini, args=(user_text,)).start()
+        threading.Thread(target=self.query_dual_ai, args=(user_text,)).start()
 
-    def query_gemini(self, prompt):
+    def query_dual_ai(self, prompt):
+        """الاستعلام الذكي: Gemini 2.0 Flash أولاً للمعلومات الحديثة، ثم Groq كاحتياطي سريع"""
         Clock.schedule_once(lambda dt: self.update_status("جاري التفكير والتوليد..."))
+        
+        system_instruction = "أنت مساعد صوتي ذكي اسمه 811. أجب بإيجاز ووضوح باللهجة العراقية أو العربية الفصحى البسيطة."
+        
+        # --- المحاولة الأولى: Google AI Studio / Gemini (النموذج الأحدث) ---
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
+            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
             headers = {'Content-Type': 'application/json'}
-            system_instruction = "أنت مساعد صوتي ذكي اسمه 811. أجب بإيجاز ووضوح باللهجة العراقية أو العربية الفصحى البسيطة."
             payload = {
                 "contents": [{"parts": [{"text": f"{system_instruction}\n\nالسؤال: {prompt}"}]}]
             }
-            res = requests.post(url, json=payload, headers=headers, timeout=10)
+            
+            res = requests.post(gemini_url, json=payload, headers=headers, timeout=8)
             if res.status_code == 200:
                 answer = res.json()['candidates'][0]['content']['parts'][0]['text']
-                Clock.schedule_once(lambda dt: self.add_to_chat("الاصطناعي", answer))
+                Clock.schedule_once(lambda dt: self.add_to_chat("811 (Gemini)", answer))
                 Clock.schedule_once(lambda dt: self.speak_out(answer))
-            else:
-                Clock.schedule_once(lambda dt: self.speak_out("حدث خطأ في الاتصال بالسيرفر"))
+                return
         except Exception as e:
-            Clock.schedule_once(lambda dt: self.speak_out("عذراً، تعذر الاتصال بالشبكة"))
+            print(f"Gemini API Error: {e}, Switching to Groq...")
+
+        # --- المحاولة الثانية: Groq Cloud (الاحتياطي السريع) ---
+        try:
+            groq_url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.groq_api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 300
+            }
+            
+            res = requests.post(groq_url, json=payload, headers=headers, timeout=6)
+            if res.status_code == 200:
+                answer = res.json()['choices'][0]['message']['content']
+                Clock.schedule_once(lambda dt: self.add_to_chat("811 (Groq)", answer))
+                Clock.schedule_once(lambda dt: self.speak_out(answer))
+                return
+        except Exception as e:
+            print(f"Groq API Error: {e}")
+
+        # في حال فشل السيرفرين معاً
+        Clock.schedule_once(lambda dt: self.speak_out("عذراً، متعذر الاتصال بالسيرفرات حالياً"))
 
     def speak_out(self, text):
         if platform == 'android' and self.tts:
