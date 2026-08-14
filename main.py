@@ -18,7 +18,7 @@ from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
 from kivy.metrics import dp
 
 # ==========================================
-# 🔑 ضع مفاتيح الـ API الخاصة بك هنا
+# 🔑 مفاتيح الـ API
 # ==========================================
 GROQ_API_KEY = "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"
 GEMINI_API_KEY = "AQ.Ab8RN6KkUgKsAetuELPjj2IvhP6zWXTXtu8tkv3sCWDeoSBpLg"
@@ -61,9 +61,6 @@ else:
             return func(*args, **kwargs)
         return wrapper
 
-# ==========================================
-# Arabic Font Helper
-# ==========================================
 def get_arabic_font():
     if platform == "android":
         possible_fonts = [
@@ -80,7 +77,7 @@ def get_arabic_font():
 ARABIC_FONT = get_arabic_font()
 
 # ==========================================
-# AI Handler (Groq + Gemini Fallback)
+# AI Handler
 # ==========================================
 class AIHandler:
     def __init__(self):
@@ -138,7 +135,7 @@ class AIHandler:
             return self.ask_gemini(prompt)
 
 # ==========================================
-# Animated Voice Visualizer
+# Animated Visualizer
 # ==========================================
 class VoiceVisualizer(Widget):
     def __init__(self, **kwargs):
@@ -228,9 +225,9 @@ class VoiceAssistant811(BoxLayout):
         self.spacing = dp(12)
         self.padding = dp(16)
 
-        # إدارة حالات الاستماع (PASSIVE = انتظار المنادى، ACTIVE = استقبال السؤال)
         self.listen_mode = "PASSIVE"
         self.wake_words = ["811", "ثمانية", "مساعد", "يا مساعد", "يا 811", "ثمانمئة"]
+        self.active_retries = 0
 
         with self.canvas.before:
             Color(0.07, 0.07, 0.09, 1)
@@ -256,18 +253,20 @@ class VoiceAssistant811(BoxLayout):
         self.add_widget(self.visualizer)
 
         self.status_label = Label(
-            text="جارٍ بدء الإنصات...",
+            text=fix_text("جارٍ بدء الإنصات..."),
             font_size="14sp",
             bold=True,
             size_hint_y=None,
             height=dp(25),
             color=(0, 0.75, 1, 1)
         )
+        if ARABIC_FONT:
+            self.status_label.font_name = ARABIC_FONT
         self.add_widget(self.status_label)
 
         self.scroll_view = ScrollView(size_hint=(1, 1), do_scroll_x=False, do_scroll_y=True)
         self.info_label = Label(
-            text=fix_text("قل (يا 811) أو (يا مساعد) ليتم تفعيل المساعد تلقائياً..."),
+            text=fix_text("قل (يا 811) أو (يا مساعد) لتفعيل المساعد تلقائياً..."),
             font_size="14sp",
             color=(0.85, 0.85, 0.9, 1),
             halign="center",
@@ -283,7 +282,7 @@ class VoiceAssistant811(BoxLayout):
         self.add_widget(self.scroll_view)
 
         self.action_button = Button(
-            text="المساعد يعمل تلقائياً (مناداة)",
+            text=fix_text("المساعد يعمل تلقائياً (مناداة)"),
             font_size="16sp",
             bold=True,
             size_hint_y=None,
@@ -291,6 +290,8 @@ class VoiceAssistant811(BoxLayout):
             background_normal="",
             background_color=(0, 0.45, 0.9, 1)
         )
+        if ARABIC_FONT:
+            self.action_button.font_name = ARABIC_FONT
         self.action_button.bind(on_press=self.on_manual_restart)
         self.add_widget(self.action_button)
 
@@ -308,7 +309,7 @@ class VoiceAssistant811(BoxLayout):
 
     @mainthread
     def update_status(self, text, color=(1, 1, 1, 1), state="idle"):
-        self.status_label.text = str(text)
+        self.status_label.text = fix_text(str(text))
         self.status_label.color = color
         self.visualizer.set_state(state)
 
@@ -404,8 +405,12 @@ class VoiceAssistant811(BoxLayout):
 
                 @java_method("(I)V")
                 def onError(self, error):
-                    # إعادة الإنصات التلقائي فوراً وبصمت عند الانقطاع أو الصمت
-                    Clock.schedule_once(lambda dt: self.outer.restart_listening_loop(), 0.5)
+                    if self.outer.listen_mode == "ACTIVE" and self.outer.active_retries < 2:
+                        self.outer.active_retries += 1
+                        Clock.schedule_once(lambda dt: self.outer.start_listening_intent(), 0.5)
+                    else:
+                        self.outer.active_retries = 0
+                        Clock.schedule_once(lambda dt: self.outer.start_passive_listening(), 0.5)
 
                 @java_method("(Landroid/os/Bundle;)V")
                 def onResults(self, results):
@@ -433,24 +438,32 @@ class VoiceAssistant811(BoxLayout):
             self.update_info(f"STT Init Error: {e}")
 
     def speak_text(self, text, on_complete_callback=None):
+        clean_speech_text = clean_text(text)
         if platform == "android" and self.tts_engine and self.tts_ready:
             try:
                 from jnius import autoclass
                 TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
                 HashMap = autoclass("java.util.HashMap")
                 params = HashMap()
-                clean_speech_text = clean_text(text)
                 self.tts_engine.speak(str(clean_speech_text), TextToSpeech.QUEUE_FLUSH, params)
+                
+                # تقدير زمني دقيق لطول الكلام لحين انتهاء النطق قبل فتح الميكروفون
+                words_count = len(clean_speech_text.split())
+                duration = max(1.8, words_count * 0.35)
+                
                 if on_complete_callback:
-                    Clock.schedule_once(lambda dt: on_complete_callback(), 2.5)
+                    Clock.schedule_once(lambda dt: on_complete_callback(), duration)
             except Exception as e:
                 self.update_info(f"Speak error: {e}")
+                if on_complete_callback:
+                    Clock.schedule_once(lambda dt: on_complete_callback(), 1.0)
         else:
             if on_complete_callback:
                 Clock.schedule_once(lambda dt: on_complete_callback(), 1.0)
 
     def start_passive_listening(self):
         self.listen_mode = "PASSIVE"
+        self.active_retries = 0
         self.start_listening_intent()
 
     def start_active_listening(self):
@@ -475,28 +488,22 @@ class VoiceAssistant811(BoxLayout):
                 pass
 
     def restart_listening_loop(self):
-        if self.listen_mode == "PASSIVE":
-            self.start_passive_listening()
-        else:
-            self.start_passive_listening()
+        self.start_passive_listening()
 
     def handle_speech_results(self, spoken_text):
         spoken_clean = spoken_text.lower()
         
-        # إذا كنا في حالة انتظار كلمة التفعيل (PASSIVE)
         if self.listen_mode == "PASSIVE":
             triggered = any(word in spoken_clean for word in self.wake_words)
             if triggered:
                 self.update_status("تم رصد المنادى!", color=(0, 0.85, 0.45, 1), state="speaking")
                 self.update_info("811: تفضل أسمعك...")
-                # يرد التطبيق بصوته "تفضل أسمعك" ثم يفتح المايك فوراً لاستقبال السؤال
                 self.speak_text("تفضل أسمعك", on_complete_callback=self.start_active_listening)
             else:
-                # إذا لم تكن الكلمة هي المنادى، يستمر في الإنصات الخفي
                 self.start_passive_listening()
 
-        # إذا كنا في حالة استقبال السؤال (ACTIVE)
         elif self.listen_mode == "ACTIVE":
+            self.active_retries = 0
             self.update_info(f"أنت: {spoken_text}")
             self.update_status("جاري التفكير مع الذكاء الاصطناعي...", color=(1, 0.65, 0, 1), state="processing")
             threading.Thread(target=self._run_ai_thread, args=(spoken_text,), daemon=True).start()
@@ -506,7 +513,6 @@ class VoiceAssistant811(BoxLayout):
             result = self.ai_handler.ask(user_prompt)
             self.update_status("يتحدث الآن...", color=(0.1, 0.85, 0.45, 1), state="speaking")
             self.update_info(f"أنت: {user_prompt}\n\nالذكاء الاصطناعي: {result}")
-            # نطق الإجابة ثم العودة تلقائياً لحالة انتظار كلمة المنادى
             self.speak_text(result, on_complete_callback=self.start_passive_listening)
         except Exception as e:
             self.update_status("حدث خطأ في الاتصال", color=(1, 0.2, 0.2, 1), state="idle")
