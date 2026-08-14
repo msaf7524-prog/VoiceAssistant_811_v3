@@ -8,7 +8,7 @@ import json
 
 from kivy.app import App
 from kivy.clock import Clock, mainthread
-from kivy.utils import platform, get_color_from_hex
+from kivy.utils import platform
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
@@ -18,7 +18,7 @@ from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
 from kivy.metrics import dp
 
 # ==========================================
-# 🔑 ضع مفاتيح الـ API الخاصة بك هنا داخل العلامات ""
+# 🔑 ضع مفاتيح الـ API الخاصة بك هنا
 # ==========================================
 GROQ_API_KEY = "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"
 GEMINI_API_KEY = "AQ.Ab8RN6KkUgKsAetuELPjj2IvhP6zWXTXtu8tkv3sCWDeoSBpLg"
@@ -86,9 +86,8 @@ class AIHandler:
     def __init__(self):
         self.groq_url = "https://api.groq.com/openai/v1/chat/completions"
         self.system_prompt = (
-            "You are a highly accurate, smart, and fast Arabic voice assistant named 811. "
-            "Always provide accurate, up-to-date, and correct factual answers. "
-            "Keep your responses short, natural, clear, and without markdown or special formatting."
+            "You are a smart and fast Arabic voice assistant named 811. "
+            "Keep your responses short, natural, accurate, clear, and without markdown or special formatting."
         )
 
     def ask_groq(self, prompt):
@@ -229,6 +228,10 @@ class VoiceAssistant811(BoxLayout):
         self.spacing = dp(12)
         self.padding = dp(16)
 
+        # إدارة حالات الاستماع (PASSIVE = انتظار المنادى، ACTIVE = استقبال السؤال)
+        self.listen_mode = "PASSIVE"
+        self.wake_words = ["811", "ثمانية", "مساعد", "يا مساعد", "يا 811", "ثمانمئة"]
+
         with self.canvas.before:
             Color(0.07, 0.07, 0.09, 1)
             self.bg_rect = RoundedRectangle(pos=self.pos, size=self.size)
@@ -253,7 +256,7 @@ class VoiceAssistant811(BoxLayout):
         self.add_widget(self.visualizer)
 
         self.status_label = Label(
-            text="Ready",
+            text="جارٍ بدء الإنصات...",
             font_size="14sp",
             bold=True,
             size_hint_y=None,
@@ -264,7 +267,7 @@ class VoiceAssistant811(BoxLayout):
 
         self.scroll_view = ScrollView(size_hint=(1, 1), do_scroll_x=False, do_scroll_y=True)
         self.info_label = Label(
-            text=fix_text("اضغط على الزر بالتأسفل للبدء..."),
+            text=fix_text("قل (يا 811) أو (يا مساعد) ليتم تفعيل المساعد تلقائياً..."),
             font_size="14sp",
             color=(0.85, 0.85, 0.9, 1),
             halign="center",
@@ -280,7 +283,7 @@ class VoiceAssistant811(BoxLayout):
         self.add_widget(self.scroll_view)
 
         self.action_button = Button(
-            text="Tap to Speak",
+            text="المساعد يعمل تلقائياً (مناداة)",
             font_size="16sp",
             bold=True,
             size_hint_y=None,
@@ -288,7 +291,7 @@ class VoiceAssistant811(BoxLayout):
             background_normal="",
             background_color=(0, 0.45, 0.9, 1)
         )
-        self.action_button.bind(on_press=self.on_button_click)
+        self.action_button.bind(on_press=self.on_manual_restart)
         self.add_widget(self.action_button)
 
         Clock.schedule_once(self._init_system, 0.5)
@@ -314,32 +317,24 @@ class VoiceAssistant811(BoxLayout):
         self.info_label.text = fix_text(str(text))
         self.scroll_view.scroll_y = 1.0
 
-    @mainthread
-    def set_button_disabled(self, disabled_flag):
-        self.action_button.disabled = disabled_flag
-        self.action_button.background_color = (0.2, 0.2, 0.25, 1) if disabled_flag else (0, 0.45, 0.9, 1)
-
     def _init_system(self, dt):
         if platform == "android":
             self.request_android_permissions()
             self._init_tts()
             self._init_stt()
         else:
-            self.update_status("Ready (Desktop)", state="idle")
+            self.update_status("جاهز (سطح المكتب)", state="idle")
 
     def request_android_permissions(self):
         try:
             from android.permissions import request_permissions, check_permission, Permission
             def permission_callback(permissions, results):
                 if all(results):
-                    self.update_status("Permissions Granted", color=(0, 1, 0, 1), state="idle")
-                else:
-                    self.update_status("Permission Denied", color=(1, 0, 0, 1), state="idle")
-
+                    self.start_passive_listening()
             if not check_permission(Permission.RECORD_AUDIO):
                 request_permissions([Permission.RECORD_AUDIO], permission_callback)
             else:
-                self.update_status("Ready", color=(0, 0.75, 1, 1), state="idle")
+                self.start_passive_listening()
         except Exception as e:
             self.update_info(f"Permission error: {e}")
 
@@ -386,7 +381,10 @@ class VoiceAssistant811(BoxLayout):
 
                 @java_method("(Landroid/os/Bundle;)V")
                 def onReadyForSpeech(self, params):
-                    self.outer.update_status("Listening...", color=(0, 0.75, 1, 1), state="listening")
+                    if self.outer.listen_mode == "ACTIVE":
+                        self.outer.update_status("أسمعك الآن... تفضل بسؤالك", color=(0, 0.85, 0.45, 1), state="listening")
+                    else:
+                        self.outer.update_status("في انتظار مناداة (811) أو (يا مساعد)...", color=(0, 0.75, 1, 1), state="idle")
 
                 @java_method("()V")
                 def onBeginningOfSpeech(self):
@@ -402,24 +400,22 @@ class VoiceAssistant811(BoxLayout):
 
                 @java_method("()V")
                 def onEndOfSpeech(self):
-                    self.outer.update_status("Thinking...", color=(1, 0.65, 0, 1), state="processing")
+                    pass
 
                 @java_method("(I)V")
                 def onError(self, error):
-                    msg = "تكلم فور الضغط" if error == 7 else f"خطأ المايك: {error}"
-                    self.outer.update_status(msg, color=(1, 0.3, 0.3, 1), state="idle")
-                    self.outer.set_button_disabled(False)
+                    # إعادة الإنصات التلقائي فوراً وبصمت عند الانقطاع أو الصمت
+                    Clock.schedule_once(lambda dt: self.outer.restart_listening_loop(), 0.5)
 
                 @java_method("(Landroid/os/Bundle;)V")
                 def onResults(self, results):
                     SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
                     matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     if matches and matches.size() > 0:
-                        spoken_text = matches.get(0)
-                        self.outer.on_speech_recognized(spoken_text)
+                        text = matches.get(0)
+                        self.outer.handle_speech_results(text)
                     else:
-                        self.outer.update_status("لم يتم سماع صوت", color=(1, 0.3, 0.3, 1), state="idle")
-                        self.outer.set_button_disabled(False)
+                        self.outer.restart_listening_loop()
 
                 @java_method("(Landroid/os/Bundle;)V")
                 def onPartialResults(self, results):
@@ -432,10 +428,11 @@ class VoiceAssistant811(BoxLayout):
             self.stt_listener = SpeechListener(self)
             self.speech_recognizer = SpeechRecognizer.createSpeechRecognizer(PythonActivity.mActivity)
             self.speech_recognizer.setRecognitionListener(self.stt_listener)
+            self.start_passive_listening()
         except Exception as e:
             self.update_info(f"STT Init Error: {e}")
 
-    def speak_text(self, text):
+    def speak_text(self, text, on_complete_callback=None):
         if platform == "android" and self.tts_engine and self.tts_ready:
             try:
                 from jnius import autoclass
@@ -444,11 +441,24 @@ class VoiceAssistant811(BoxLayout):
                 params = HashMap()
                 clean_speech_text = clean_text(text)
                 self.tts_engine.speak(str(clean_speech_text), TextToSpeech.QUEUE_FLUSH, params)
+                if on_complete_callback:
+                    Clock.schedule_once(lambda dt: on_complete_callback(), 2.5)
             except Exception as e:
                 self.update_info(f"Speak error: {e}")
+        else:
+            if on_complete_callback:
+                Clock.schedule_once(lambda dt: on_complete_callback(), 1.0)
+
+    def start_passive_listening(self):
+        self.listen_mode = "PASSIVE"
+        self.start_listening_intent()
+
+    def start_active_listening(self):
+        self.listen_mode = "ACTIVE"
+        self.start_listening_intent()
 
     @run_on_ui_thread
-    def start_listening(self):
+    def start_listening_intent(self):
         if platform == "android" and self.speech_recognizer:
             try:
                 from jnius import autoclass
@@ -461,33 +471,50 @@ class VoiceAssistant811(BoxLayout):
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-SA")
 
                 self.speech_recognizer.startListening(intent)
-            except Exception as e:
-                self.update_info(f"Start listening error: {e}")
-                self.set_button_disabled(False)
+            except Exception:
+                pass
+
+    def restart_listening_loop(self):
+        if self.listen_mode == "PASSIVE":
+            self.start_passive_listening()
         else:
-            self.on_speech_recognized("من هو رئيس الوزراء العراقي؟")
+            self.start_passive_listening()
 
-    def on_button_click(self, instance):
-        self.set_button_disabled(True)
-        self.update_status("Listening...", color=(0, 0.75, 1, 1), state="listening")
-        self.start_listening()
+    def handle_speech_results(self, spoken_text):
+        spoken_clean = spoken_text.lower()
+        
+        # إذا كنا في حالة انتظار كلمة التفعيل (PASSIVE)
+        if self.listen_mode == "PASSIVE":
+            triggered = any(word in spoken_clean for word in self.wake_words)
+            if triggered:
+                self.update_status("تم رصد المنادى!", color=(0, 0.85, 0.45, 1), state="speaking")
+                self.update_info("811: تفضل أسمعك...")
+                # يرد التطبيق بصوته "تفضل أسمعك" ثم يفتح المايك فوراً لاستقبال السؤال
+                self.speak_text("تفضل أسمعك", on_complete_callback=self.start_active_listening)
+            else:
+                # إذا لم تكن الكلمة هي المنادى، يستمر في الإنصات الخفي
+                self.start_passive_listening()
 
-    def on_speech_recognized(self, spoken_text):
-        self.update_info(f"أنت: {spoken_text}")
-        self.update_status("Thinking...", color=(1, 0.65, 0, 1), state="processing")
-        threading.Thread(target=self._run_ai_thread, args=(spoken_text,), daemon=True).start()
+        # إذا كنا في حالة استقبال السؤال (ACTIVE)
+        elif self.listen_mode == "ACTIVE":
+            self.update_info(f"أنت: {spoken_text}")
+            self.update_status("جاري التفكير مع الذكاء الاصطناعي...", color=(1, 0.65, 0, 1), state="processing")
+            threading.Thread(target=self._run_ai_thread, args=(spoken_text,), daemon=True).start()
 
     def _run_ai_thread(self, user_prompt):
         try:
             result = self.ai_handler.ask(user_prompt)
-            self.update_status("Speaking...", color=(0.1, 0.85, 0.45, 1), state="speaking")
+            self.update_status("يتحدث الآن...", color=(0.1, 0.85, 0.45, 1), state="speaking")
             self.update_info(f"أنت: {user_prompt}\n\nالذكاء الاصطناعي: {result}")
-            self.speak_text(result)
+            # نطق الإجابة ثم العودة تلقائياً لحالة انتظار كلمة المنادى
+            self.speak_text(result, on_complete_callback=self.start_passive_listening)
         except Exception as e:
-            self.update_status("فشل الطلب", color=(1, 0.2, 0.2, 1), state="idle")
+            self.update_status("حدث خطأ في الاتصال", color=(1, 0.2, 0.2, 1), state="idle")
             self.update_info(str(e))
-        finally:
-            self.set_button_disabled(False)
+            Clock.schedule_once(lambda dt: self.start_passive_listening(), 3.0)
+
+    def on_manual_restart(self, instance):
+        self.start_passive_listening()
 
 
 class VoiceAssistantApp(App):
