@@ -14,7 +14,7 @@ from kivy.uix.switch import Switch
 from kivy.clock import Clock
 from kivy.properties import ListProperty, StringProperty
 
-# وضع مفتاح Gemini API هنا مباشرة أو قراءته من البيئة
+# مفتاح Gemini API من متغيرات البيئة أو المفتاح الاحتياطي
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6KkUgKsAetuELPjj2IvhP6zWXTXtu8tkv3sCWDeoSBpLg")
 
 KV = """
@@ -78,7 +78,7 @@ KV = """
             valign: 'middle'
             size_hint_y: 0.25
 
-    # الشريط السفلي للأزرار (الواجهة الأصلية)
+    # الشريط السفلي للأزرار
     BoxLayout:
         orientation: 'horizontal'
         size_hint_y: 0.12
@@ -103,7 +103,7 @@ KV = """
 """
 
 class MainScreen(BoxLayout):
-    circle_color = ListProperty([0, 0.82, 1, 1])  # السماوي الأصلي عند الجاهزية
+    circle_color = ListProperty([0, 0.82, 1, 1])  # السماوي عند الجاهزية/الاستماع
     status_text = StringProperty("أسمعك الآن... تفضل بسؤالك")
     transcript_text = StringProperty("")
     timer_button_text = StringProperty("تفعيل 6 ساعات")
@@ -145,16 +145,20 @@ class MainScreen(BoxLayout):
             self.toggle_timer()
 
     def start_ai_interaction(self, user_prompt):
-        """تغيير لون الدائرة وإرسال الطلب للذكاء الاصطناعي"""
-        self.circle_color = [1, 0.2, 0.2, 1]  # الدائرة الحمراء الأصلية أثناء المعالجة
+        """تغيير لون الدائرة للون الأحمر (معالجة) وإرسال الطلب"""
+        self.circle_color = [1, 0.2, 0.2, 1]
         self.status_text = "جاري التفكير والتواصل مع Gemini..."
         threading.Thread(target=self.call_gemini_api, args=(user_prompt,), daemon=True).start()
 
     def call_gemini_api(self, prompt_text):
-        """الاتصال بـ Gemini API وإصلاح خطأ 400 و 401"""
+        """الاتصال بـ Gemini API وإرسال التعليمات للهجة العراقية"""
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         headers = {'Content-Type': 'application/json'}
+        
         payload = {
+            "system_instruction": {
+                "parts": [{"text": "أنت المساعد الصوتي 811. تجيب دائماً باللهجة العراقية اليومية، بأسلوب مختصر، واضح، ومباشر ومناسب للإجابات الصوتية."}]
+            },
             "contents": [{
                 "parts": [{"text": prompt_text}]
             }]
@@ -170,11 +174,12 @@ class MainScreen(BoxLayout):
                 Clock.schedule_once(lambda dt: self.update_ui_error("خطأ 401: مفتاح API غير صالح أو مفقود"))
             else:
                 Clock.schedule_once(lambda dt: self.update_ui_error(f"خطأ من السيرفر: {response.status_code}"))
-        except Exception as e:
+        except Exception:
             Clock.schedule_once(lambda dt: self.update_ui_error("تعذر الاتصال بالشبكة"))
 
     def update_ui_success(self, reply):
-        self.circle_color = [0, 0.82, 1, 1]
+        # التحويل للون الأخضر أثناء التحدث/إظهار الرد
+        self.circle_color = [0, 0.9, 0.46, 1]
         self.status_text = "يتحدث الآن..."
         self.transcript_text = reply
 
@@ -183,7 +188,7 @@ class MainScreen(BoxLayout):
         self.status_text = err_msg
 
     def open_settings(self):
-        """نافذة الإعدادات الأصلية"""
+        """نافذة الإعدادات الأصليّة"""
         content = BoxLayout(orientation='vertical', padding=15, spacing=15)
         
         lbl_sens = Label(text=f"حساسية الميكروفون: {int(self.mic_sensitivity * 100)}%", size_hint_y=0.2)
