@@ -24,10 +24,8 @@ try:
         reshaped = arabic_reshaper.reshape(text)
         return get_display(reshaped)
 except ImportError:
-    # معالج احتياطي محلي بسيط للتوجيه في حال عدم توفر المكتبات
     def ar(text):
         if not text: return ""
-        # تعكير النص لتصحيح اتجاه Kivy الإفتراضي
         words = text.split(' ')
         return " ".join([w[::-1] for w in words[::-1]])
 
@@ -97,7 +95,7 @@ if platform == 'android':
         def onResults(self, results):
             matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             if matches and matches.size() > 0:
-                text = matches.get(0)
+                text = str(matches.get(0))
                 Clock.schedule_once(lambda dt: self.app.handle_user_input(text))
             else:
                 Clock.schedule_once(lambda dt: self.app.restart_listening(), 0.5)
@@ -106,7 +104,7 @@ if platform == 'android':
         def onPartialResults(self, partialResults):
             matches = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             if matches and matches.size() > 0:
-                text = matches.get(0).lower()
+                text = str(matches.get(0)).lower()
                 Clock.schedule_once(lambda dt: self.app.check_barge_in(text))
 
         @java_method('(ILandroid/os/Bundle;)V')
@@ -165,18 +163,16 @@ class VoiceOrb(Widget):
         if cx == 0 and cy == 0: return
 
         with self.canvas:
-            # تحديد الألوان حسب الحالة
             if self.mode == "listening":
-                r, g, b = 0.0, 0.85, 1.0  # أزرق نيوني فاقع
+                r, g, b = 0.0, 0.85, 1.0  # أزرق نيوني
                 base_radius = 65 + self.pulse * 1.5
             elif self.mode == "speaking":
                 r, g, b = 0.1, 0.9, 0.4   # أخضر نيون
                 base_radius = 70 + math.sin(self.angle * 2) * 18
             else:
-                r, g, b = 0.2, 0.5, 0.9   # أزرق ملكي هادئ
+                r, g, b = 0.2, 0.5, 0.9   # أزرق هادئ
                 base_radius = 55 + self.pulse * 0.5
 
-            # رسم الهالة الخارجيّة المتوهجة
             Color(r, g, b, 0.15)
             Ellipse(pos=(cx - (base_radius + 30), cy - (base_radius + 30)),
                     size=((base_radius + 30)*2, (base_radius + 30)*2))
@@ -185,12 +181,10 @@ class VoiceOrb(Widget):
             Ellipse(pos=(cx - (base_radius + 15), cy - (base_radius + 15)),
                     size=((base_radius + 15)*2, (base_radius + 15)*2))
 
-            # رسم الدائرة المركزية
             Color(r, g, b, 0.9)
             Ellipse(pos=(cx - base_radius, cy - base_radius),
                     size=(base_radius*2, base_radius*2))
 
-            # رسم حلقة النبض المتحركة
             Color(1, 1, 1, 0.6)
             Line(circle=(cx, cy, base_radius + abs(self.pulse)*0.8), width=2)
 
@@ -222,7 +216,7 @@ class VoiceAssistantApp(App):
         )
         root.add_widget(title_label)
 
-        # 2. كرة الصوت المتحركة التفاعلية في المنتصف
+        # 2. كرة الصوت المتحركة
         self.orb = VoiceOrb(
             size_hint=(None, None),
             size=(200, 200),
@@ -230,7 +224,7 @@ class VoiceAssistantApp(App):
         )
         root.add_widget(self.orb)
 
-        # 3. نص حالة المساعد
+        # 3. نص الحالة
         self.status_label = Label(
             text=ar("في انتظار مناداة [811] أو [يا مساعد]..."),
             font_size='16sp',
@@ -241,7 +235,7 @@ class VoiceAssistantApp(App):
         )
         root.add_widget(self.status_label)
 
-        # 4. سجل المحادثة المصمم بأناقة
+        # 4. سجل المحادثة
         scroll = ScrollView(
             pos_hint={'center_x': 0.5, 'center_y': 0.28},
             size_hint=(0.9, 0.35)
@@ -343,7 +337,11 @@ class VoiceAssistantApp(App):
     def check_barge_in(self, partial_text):
         if self.is_speaking and ("811" in partial_text or "توقف" in partial_text or "ثمن ميه" in partial_text):
             if platform == 'android' and self.tts:
-                self.tts.stop()
+                def _stop():
+                    try:
+                        self.tts.stop()
+                    except Exception as e: pass
+                run_on_ui_thread(_stop)
             self.is_speaking = False
             self.set_state("listening", "تم إيقاف النطق! تفضل بالجديد...")
 
@@ -396,12 +394,21 @@ class VoiceAssistantApp(App):
         Clock.schedule_once(lambda dt: self.speak_out("عذراً، يتعذر الاتصال بالخادم حالياً"))
 
     def speak_out(self, text):
-        if platform == 'android' and self.tts:
+        def _ui_speak():
             self.set_state("speaking", "يتحدث الآن...")
-            params = Bundle()
-            self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "811_utterance")
+            if platform == 'android' and self.tts:
+                try:
+                    params = Bundle()
+                    self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "811_utterance")
+                except Exception as e:
+                    print("TTS Error:", e)
+            else:
+                self.set_state("speaking", f"نطق: {text}")
+
+        if platform == 'android':
+            run_on_ui_thread(_ui_speak)
         else:
-            self.set_state("speaking", f"نطق: {text}")
+            _ui_speak()
 
     def toggle_6hour_mode(self, instance):
         if not self.is_6hour_active:
