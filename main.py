@@ -117,7 +117,7 @@ if platform == 'android':
 class VoiceAssistantApp(App):
     def build(self):
         # ضع مفتاح API الخاص بك هنا
-        self.api_key = "YOUR_GEMINI_API_KEY"
+        self.api_key = "AQ.Ab8RN6KkUgKsAetuELPjj2IvhP6zWXTXtu8tkv3sCWDeoSBpLg"
         
         self.is_speaking = False
         self.is_6hour_active = False
