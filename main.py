@@ -19,7 +19,7 @@ from kivy.utils import platform
 import arabic_reshaper
 from bidi.algorithm import get_display
 
-# استدعاء مكتبات أندرويد عبر Pyjnius عند التشغيل على الهاتف
+# استدعاء مكتبات أندرويد عبر Pyjnius
 if platform == 'android':
     from jnius import autoclass, PythonJavaClass, java_method
     
@@ -38,7 +38,7 @@ def fix_arabic(text):
     reshaped_text = arabic_reshaper.reshape(text)
     return get_display(reshaped_text)
 
-# إعدادات واجهة Kivy المباشرة بنفس التصميم والألوان الأصلية
+# واجهة المستخدم Kivy (نفس التصميم والألوان الأصلية 100%)
 KV = '''
 <MainScreen>:
     canvas.before:
@@ -66,7 +66,6 @@ KV = '''
         FloatLayout:
             size_hint_y: 0.4
             
-            # الدائرة الخارجيّة العميقة
             Widget:
                 id: outer_circle
                 size_hint: None, None
@@ -79,7 +78,6 @@ KV = '''
                         pos: self.pos
                         size: self.size
 
-            # الدائرة الداخلية المتحركة
             Widget:
                 id: inner_circle
                 size_hint: None, None
@@ -92,7 +90,6 @@ KV = '''
                         pos: self.pos
                         size: self.size
 
-            # أيقونة/نقاط الحالة داخل الدائرة
             Label:
                 text: '• • • •'
                 font_size: '20sp'
@@ -147,7 +144,7 @@ Builder.load_string(KV)
 
 class MainScreen(FloatLayout):
     status_text = 'Ready'
-    status_color = [0, 0.7, 1, 1]  # أزرق للسكون
+    status_color = [0, 0.7, 1, 1]
     circle_main_color = [0.12, 0.3, 0.7, 1]
     circle_bg_color = [0.08, 0.15, 0.3, 0.4]
 
@@ -156,21 +153,21 @@ class MainScreen(FloatLayout):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.groq_api_key = "YOUR_GROQ_API_KEY_HERE"
-        self.gemini_api_key = "YOUR_GEMINI_API_KEY_HERE"
-        self.is_listening = False
         
-        # تفعيل إعدادات الصوت والبلوتوث عند الإقلاع
+        # 🔑 ضع المفاتيح الخاصة بك بين الأقواس هنا:
+        self.gemini_api_key = "AQ.Ab8RN6JuZY13Hd1lPvjcMmQfsMqxcJvSg7hoBeaSY8aa8nnAwA"
+        self.groq_api_key = "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"
+        
+        self.is_listening = False
         Clock.schedule_once(lambda dt: self.init_android_audio(), 1)
 
     def init_android_audio(self):
-        """إعداد قناة الصوت للبلوتوث ومنع أندرويد من إيقاف التطبيق"""
+        """إعداد قناة الصوت للبلوتوث والخدمة الدائمة"""
         if platform == 'android':
             try:
                 activity = PythonActivity.mActivity
                 audio_manager = activity.getSystemService(Context.AUDIO_SERVICE)
                 
-                # توجيه المايك والسماعة إلى البلوتوث (SCO) تلقائياً عند الاتصال
                 if audio_manager.isBluetoothScoAvailableOffCall():
                     audio_manager.startBluetoothSco()
                     audio_manager.setBluetoothScoOn(True)
@@ -181,19 +178,18 @@ class MainScreen(FloatLayout):
                 print(f"Audio Init Error: {e}")
 
     def update_status(self, text, color, user_msg="", ai_msg=""):
-        """تحديث الحالة والواجهة التفاعلية بأمان من داخل الخيوط البرمجية"""
+        """تحديث أنيميشن الواجهة بأمان"""
         def _update(dt):
             self.status_text = text
             self.status_color = color
             
-            # تغيير لون الحلقة حسب الحالة (تفكير = أصفر/برتقالي، نطق = أخضر، جاهز = أزرق)
             if color == [1, 0.6, 0, 1]:  # Thinking...
                 self.circle_main_color = [0.9, 0.55, 0, 1]
                 self.circle_bg_color = [0.4, 0.25, 0, 0.4]
             elif color == [0, 0.8, 0.3, 1]:  # Speaking...
                 self.circle_main_color = [0.1, 0.8, 0.4, 1]
                 self.circle_bg_color = [0.05, 0.35, 0.15, 0.4]
-            else:  # Ready / Passive
+            else:  # Ready
                 self.circle_main_color = [0.12, 0.3, 0.7, 1]
                 self.circle_bg_color = [0.08, 0.15, 0.3, 0.4]
 
@@ -205,68 +201,68 @@ class MainScreen(FloatLayout):
         Clock.schedule_once(_update)
 
     def on_tap_speak(self):
-        """بدء عملية الاستماع يدوياً أو إعادة ضبط الحلقة"""
         if not self.is_listening:
             self.start_listening_process()
 
     def start_listening_process(self):
         self.is_listening = True
         self.update_status("Listening...", [0, 0.7, 1, 1], user_msg="أنت: جاري الاستماع...")
-        
-        # تشغيل خيط معالجة بالخلفية لمنع تجمد الشاشة
         threading.Thread(target=self._dummy_listen_and_process, daemon=True).start()
 
     def _dummy_listen_and_process(self):
-        """محاكة مؤقتة للاستماع والمعالجة لاختبار الربط واستقرار الخدمة"""
         time.sleep(2)
         query = "من هو رئيس الوزراء الحالي للعراق"
         self.update_status("Thinking...", [1, 0.6, 0, 1], user_msg=f"أنت: {query}")
 
-        # طلب الإجابة من الذكاء الاصطناعي
         response_text = self.query_ai_backend(query)
         
         self.update_status("Speaking...", [0, 0.8, 0.3, 1], ai_msg=f"الذكاء الاصطناعي: {response_text}")
         time.sleep(4)
         
-        # العودة التلقائية لحالة الاستعداد
         self.is_listening = False
         self.update_status("Ready", [0, 0.7, 1, 1])
 
     def query_ai_backend(self, prompt):
-        """المحرك الأساسي للذكاء الاصطناعي: Groq بأساس و Gemini كاحتياطي"""
-        # 1. محاولة استخدام Groq API
-        try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": "أنت مساعد صوتي ذكي باسم 811. أجب بشكل مختصر ودقيق ومباشر جداً باللغة العربية."},
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": 150
-            }
-            res = requests.post(url, json=payload, headers=headers, timeout=6)
-            if res.status_code == 200:
-                return res.json()['choices'][0]['message']['content'].strip()
-        except Exception as e:
-            print(f"Groq failed: {e}")
+        """محرك الذكاء الاصطناعي: Gemini كخيار أساسي، و Groq كخيار احتياطي"""
+        system_instruction = "أنت مساعد صوتي ذكي باسم 811. أجب بشكل مختصر ودقيق ومباشر جداً باللغة العربية."
 
-        # 2. التحويل التلقائي إلى Gemini API في حال تعثر Groq
+        # 1. الخيار الأساسي الأول: Gemini API
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_api_key}"
             headers = {"Content-Type": "application/json"}
             payload = {
-                "contents": [{"parts": [{"text": f"أجب بإيجاز شديد: {prompt}"}]}]
+                "contents": [{
+                    "parts": [{"text": f"{system_instruction}\n\nسؤال المستخدم: {prompt}"}]
+                }]
             }
             res = requests.post(url, json=payload, headers=headers, timeout=6)
             if res.status_code == 200:
-                return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+                data = res.json()
+                return data['candidates'][0]['content']['parts'][0]['text'].strip()
         except Exception as e:
-            print(f"Gemini failed: {e}")
+            print(f"Gemini Primary failed: {e}")
+
+        # 2. الخيار الاحتياطي: Groq API (في حال فشل Gemini)
+        if self.groq_api_key and self.groq_api_key != "ضع_مفتاح_GROQ_هنا":
+            try:
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {self.groq_api_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "max_tokens": 150
+                }
+                res = requests.post(url, json=payload, headers=headers, timeout=6)
+                if res.status_code == 200:
+                    return res.json()['choices'][0]['message']['content'].strip()
+            except Exception as e:
+                print(f"Groq Fallback failed: {e}")
 
         return "حدث خطأ في الاتصال بشبكة الذكاء الاصطناعي."
 
@@ -275,7 +271,6 @@ class VoiceApp(App):
         return MainScreen()
 
     def on_pause(self):
-        # السماح للتطبيق بالعمل المستمر في الخلفية وعدم إغلاقه عند إغلاق الشاشة
         return True
 
     def on_resume(self):
