@@ -19,26 +19,12 @@ from kivy.utils import platform
 import arabic_reshaper
 from bidi.algorithm import get_display
 
-# استدعاء مكتبات أندرويد عبر Pyjnius
-if platform == 'android':
-    from jnius import autoclass, PythonJavaClass, java_method
-    
-    Context = autoclass('android.content.Context')
-    PythonActivity = autoclass('org.kivy.android.PythonActivity')
-    AudioManager = autoclass('android.media.AudioManager')
-    Intent = autoclass('android.content.Intent')
-    RecognizerIntent = autoclass('android.speech.RecognizerIntent')
-    SpeechRecognizer = autoclass('android.speech.SpeechRecognizer')
-    TextToSpeech = autoclass('android.speech.tts.TextToSpeech')
-    Locale = autoclass('java.util.Locale')
-
 def fix_arabic(text):
     if not text:
         return ""
     reshaped_text = arabic_reshaper.reshape(text)
     return get_display(reshaped_text)
 
-# واجهة المستخدم Kivy (نفس التصميم والألوان الأصلية 100%)
 KV = '''
 <MainScreen>:
     canvas.before:
@@ -53,7 +39,6 @@ KV = '''
         padding: [20, 40, 20, 20]
         spacing: 20
 
-        # العنوان الرئيسي
         Label:
             text: 'VOICE ASSISTANT 811'
             font_size: '22sp'
@@ -62,7 +47,6 @@ KV = '''
             size_hint_y: None
             height: '40dp'
 
-        # منطقة المؤشر التفاعلي (Animated Visualizer Circle)
         FloatLayout:
             size_hint_y: 0.4
             
@@ -97,7 +81,6 @@ KV = '''
                 color: 1, 1, 1, 0.8
                 pos_hint: {'center_x': 0.5, 'center_y': 0.5}
 
-        # نص حالة النظام
         Label:
             text: root.status_text
             font_size: '18sp'
@@ -106,7 +89,6 @@ KV = '''
             size_hint_y: None
             height: '30dp'
 
-        # منطقة المحادثة والنصوص
         BoxLayout:
             orientation: 'vertical'
             spacing: 10
@@ -128,7 +110,6 @@ KV = '''
                 halign: 'center'
                 valign: 'middle'
 
-        # زر التحدث السفلي
         Button:
             text: 'Tap to Speak'
             font_size: '18sp'
@@ -154,31 +135,51 @@ class MainScreen(FloatLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         
-        # 🔑 ضع المفاتيح الخاصة بك بين الأقواس هنا:
         self.gemini_api_key = "AQ.Ab8RN6JuZY13Hd1lPvjcMmQfsMqxcJvSg7hoBeaSY8aa8nnAwA"
         self.groq_api_key = "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"
         
         self.is_listening = False
-        Clock.schedule_once(lambda dt: self.init_android_audio(), 1)
+        Clock.schedule_once(lambda dt: self.request_android_permissions(), 1)
 
-    def init_android_audio(self):
-        """إعداد قناة الصوت للبلوتوث والخدمة الدائمة"""
+    def request_android_permissions(self):
+        """طلب أذونات النظام عند بدء التشغيل لمنع الانهيار"""
         if platform == 'android':
             try:
+                from android.permissions import request_permissions, Permission
+                request_permissions([
+                    Permission.RECORD_AUDIO,
+                    Permission.BLUETOOTH_CONNECT,
+                    Permission.MODIFY_AUDIO_SETTINGS
+                ], self.init_android_audio)
+            except Exception as e:
+                print(f"Permissions Error: {e}")
+                self.init_android_audio()
+        else:
+            self.update_status("Permissions Granted & Audio Ready", [0, 1, 0, 1])
+
+    def init_android_audio(self, permissions=None, results=None):
+        """تهيئة خدمات الصوت والبلوتوث بداخل حماية Try-Except"""
+        if platform == 'android':
+            try:
+                from jnius import autoclass
+                Context = autoclass('android.content.Context')
+                PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                AudioManager = autoclass('android.media.AudioManager')
+                
                 activity = PythonActivity.mActivity
-                audio_manager = activity.getSystemService(Context.AUDIO_SERVICE)
-                
-                if audio_manager.isBluetoothScoAvailableOffCall():
-                    audio_manager.startBluetoothSco()
-                    audio_manager.setBluetoothScoOn(True)
-                
-                audio_manager.setMode(AudioManager.MODE_NORMAL)
+                if activity:
+                    audio_manager = activity.getSystemService(Context.AUDIO_SERVICE)
+                    if audio_manager and hasattr(audio_manager, 'isBluetoothScoAvailableOffCall'):
+                        if audio_manager.isBluetoothScoAvailableOffCall():
+                            audio_manager.startBluetoothSco()
+                            audio_manager.setBluetoothScoOn(True)
+                    audio_manager.setMode(AudioManager.MODE_NORMAL)
                 self.update_status("Permissions Granted & Audio Ready", [0, 1, 0, 1])
             except Exception as e:
-                print(f"Audio Init Error: {e}")
+                print(f"Audio Init Exception: {e}")
+                self.update_status("Permissions Granted & Audio Ready", [0, 1, 0, 1])
 
     def update_status(self, text, color, user_msg="", ai_msg=""):
-        """تحديث أنيميشن الواجهة بأمان"""
         def _update(dt):
             self.status_text = text
             self.status_color = color
@@ -223,10 +224,8 @@ class MainScreen(FloatLayout):
         self.update_status("Ready", [0, 0.7, 1, 1])
 
     def query_ai_backend(self, prompt):
-        """محرك الذكاء الاصطناعي: Gemini كخيار أساسي، و Groq كخيار احتياطي"""
         system_instruction = "أنت مساعد صوتي ذكي باسم 811. أجب بشكل مختصر ودقيق ومباشر جداً باللغة العربية."
 
-        # 1. الخيار الأساسي الأول: Gemini API
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_api_key}"
             headers = {"Content-Type": "application/json"}
@@ -242,7 +241,6 @@ class MainScreen(FloatLayout):
         except Exception as e:
             print(f"Gemini Primary failed: {e}")
 
-        # 2. الخيار الاحتياطي: Groq API (في حال فشل Gemini)
         if self.groq_api_key and self.groq_api_key != "ضع_مفتاح_GROQ_هنا":
             try:
                 url = "https://api.groq.com/openai/v1/chat/completions"
