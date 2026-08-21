@@ -214,7 +214,7 @@ class VoiceAssistantUI(BoxLayout):
 
         # جلب المفتاح المكتوب أو استخدام المفتاح الاحتياطي
         groq_key = self.api_input.text.strip()
-        gemini_key = os.environ.get("GEMINI_API_KEY", "")
+        gemini_key = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IZyX0tU7zsXyPuAIspztPJKTdKDic9MXbM1F49v6NAxg")
 
         # طلب الرد من الذكاء الاصطناعي
         ai_response = self.ai_engine.get_response(user_query, groq_key, gemini_key)
