@@ -14,12 +14,12 @@ class AIClient:
 
         self.groq_key = (
             groq_key
-            or os.environ.get("GROQ_API_KEY", "")
+            or os.environ.get("GROQ_API_KEY", "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")
         ).strip()
 
         self.gemini_key = (
             gemini_key
-            or os.environ.get("GEMINI_API_KEY", "")
+            or os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IZyX0tU7zsXyPuAIspztPJKTdKDic9MXbM1F49v6NAxg")
         ).strip()
 
         # =====================================================
