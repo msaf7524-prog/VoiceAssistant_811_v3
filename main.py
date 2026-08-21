@@ -1,9 +1,8 @@
 import os
-import re
 import threading
-import requests
+
 from kivy.app import App
-from kivy.clock import Clock, mainthread
+from kivy.clock import mainthread
 from kivy.utils import platform
 from kivy.core.text import LabelBase
 from kivy.uix.boxlayout import BoxLayout
@@ -17,108 +16,183 @@ from kivy.metrics import dp
 import arabic_reshaper
 from bidi.algorithm import get_display
 
-# 1. إعداد الخط العربي
+from ai_client import AIClient
+
+
+# =========================================================
+# إعداد الخط العربي
+# =========================================================
+
 FONT_PATH = "Cairo-Regular.ttf"
+
 if os.path.exists(FONT_PATH):
-    LabelBase.register(name="Cairo", fn_regular=FONT_PATH)
-    ARABIC_FONT = "Cairo"
+    try:
+        LabelBase.register(
+            name="Cairo",
+            fn_regular=FONT_PATH
+        )
+        ARABIC_FONT = "Cairo"
+    except Exception as e:
+        print("Font registration error:", e)
+        ARABIC_FONT = "Roboto"
 else:
     ARABIC_FONT = "Roboto"
 
-# دالة معالجة النصوص العربية لمنع الحروف المنفصلة والمربعات
+
 def fix_text(text):
-    if not text:
+    """
+    معالجة النص العربي حتى تظهر الحروف بشكل صحيح.
+    """
+    if text is None:
         return ""
+
+    text = str(text)
+
     try:
         reshaped = arabic_reshaper.reshape(text)
         return get_display(reshaped)
-    except Exception:
+    except Exception as e:
+        print("Arabic text error:", e)
         return text
 
-# طلب صلاحيات الأندرويد
+
+# =========================================================
+# صلاحيات Android
+# =========================================================
+
 def request_android_permissions():
-    if platform == "android":
-        try:
-            from android.permissions import request_permissions, Permission
-            request_permissions([
-                Permission.RECORD_AUDIO,
-                Permission.MODIFY_AUDIO_SETTINGS,
-                Permission.BLUETOOTH,
-                Permission.BLUETOOTH_CONNECT
-            ])
-        except Exception as e:
-            print(f"Permission error: {e}")
+    if platform != "android":
+        return
 
-# 2. محرك الاتصال بالذكاء الاصطناعي مع إظهار تفاصيل الخطأ
-class DualAIEngine:
-    def __init__(self):
-        self.groq_url = "https://api.groq.com/openai/v1/chat/completions"
-        self.system_prompt = "أنت مساعد صوتي اسمه 811. أجب بأسلوب عربي مختصر ومباشر جداً بدون رموز."
+    try:
+        from android.permissions import (
+            request_permissions,
+            Permission
+        )
 
-    def get_response(self, prompt, groq_key, gemini_key=""):
-        # محاولة الاتصال بـ Groq
-        if groq_key and groq_key.strip():
-            try:
-                headers = {
-                    "Authorization": f"Bearer {groq_key.strip()}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": prompt}
-                    ]
-                }
-                res = requests.post(self.groq_url, json=payload, headers=headers, timeout=10)
-                if res.status_code == 200:
-                    return True, res.json()["choices"][0]["message"]["content"].strip()
-                else:
-                    return False, f"خطأ Groq ({res.status_code}):\n{res.text}"
-            except Exception as e:
-                return False, f"فشل الاتصال بـ Groq:\n{str(e)}"
-        
-        return False, "يرجى إدخال مفتاح Groq API Key أولاً."
+        permissions = [
+            Permission.RECORD_AUDIO,
+            Permission.INTERNET,
+            Permission.ACCESS_NETWORK_STATE,
+            Permission.MODIFY_AUDIO_SETTINGS,
+        ]
 
-# 3. دائرة مؤشر الحالة
+        # صلاحيات Bluetooth تختلف حسب إصدار Android.
+        # نضيف ما هو متاح فقط.
+        if hasattr(Permission, "BLUETOOTH"):
+            permissions.append(Permission.BLUETOOTH)
+
+        if hasattr(Permission, "BLUETOOTH_ADMIN"):
+            permissions.append(Permission.BLUETOOTH_ADMIN)
+
+        if hasattr(Permission, "BLUETOOTH_CONNECT"):
+            permissions.append(Permission.BLUETOOTH_CONNECT)
+
+        request_permissions(permissions)
+
+    except Exception as e:
+        print("Permission error:", e)
+
+
+# =========================================================
+# دائرة الحالة
+# =========================================================
+
 class CircleWidget(BoxLayout):
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.color = (0.2, 0.6, 1, 1)
-        self.bind(pos=self.update_canvas, size=self.update_canvas)
+
+        self.color = (
+            0.2,
+            0.6,
+            1.0,
+            1.0
+        )
+
+        self.bind(
+            pos=self.update_canvas,
+            size=self.update_canvas
+        )
 
     def set_color(self, new_color):
         self.color = new_color
         self.update_canvas()
 
     def update_canvas(self, *args):
+
         self.canvas.before.clear()
+
         with self.canvas.before:
+
             Color(*self.color)
-            size = min(self.width, self.height)
-            x = self.x + (self.width - size) / 2
-            y = self.y + (self.height - size) / 2
-            Ellipse(pos=(x, y), size=(size, size))
 
-# 4. التطبيق الرئيسي
+            size = min(
+                self.width,
+                self.height
+            )
+
+            x = self.x + (
+                self.width - size
+            ) / 2
+
+            y = self.y + (
+                self.height - size
+            ) / 2
+
+            Ellipse(
+                pos=(x, y),
+                size=(size, size)
+            )
+
+
+# =========================================================
+# التطبيق الرئيسي
+# =========================================================
+
 class VoiceAssistantApp(App):
+
     def build(self):
+
+        # طلب الصلاحيات
         request_android_permissions()
-        self.ai_engine = DualAIEngine()
 
-        main_layout = BoxLayout(orientation='vertical', padding=dp(15), spacing=dp(10))
+        # العميل الموحد للذكاء الاصطناعي
+        self.ai_engine = AIClient()
 
+        # منع إرسال أكثر من طلب في نفس الوقت
+        self.processing = False
+
+        # =================================================
+        # التصميم الرئيسي
+        # =================================================
+
+        main_layout = BoxLayout(
+            orientation="vertical",
+            padding=dp(15),
+            spacing=dp(10)
+        )
+
+        # =================================================
         # العنوان
+        # =================================================
+
         self.title_label = Label(
             text="VOICE ASSISTANT 811",
-            font_size='22sp',
+            font_size="22sp",
             bold=True,
             size_hint_y=None,
             height=dp(40)
         )
-        main_layout.add_widget(self.title_label)
 
-        # حقل إدخال المفتاح
+        main_layout.add_widget(
+            self.title_label
+        )
+
+        # =================================================
+        # مفتاح Groq
+        # =================================================
+
         self.key_input = TextInput(
             hint_text="Paste Groq API Key here...",
             multiline=False,
@@ -126,81 +200,327 @@ class VoiceAssistantApp(App):
             size_hint_y=None,
             height=dp(45)
         )
-        main_layout.add_widget(self.key_input)
 
-        # دائرة الحالة
-        self.indicator_layout = BoxLayout(size_hint_y=None, height=dp(100))
+        main_layout.add_widget(
+            self.key_input
+        )
+
+        # =================================================
+        # مؤشر الحالة
+        # =================================================
+
+        self.indicator_layout = BoxLayout(
+            size_hint_y=None,
+            height=dp(100)
+        )
+
         self.status_circle = CircleWidget()
-        self.indicator_layout.add_widget(self.status_circle)
-        main_layout.add_widget(self.indicator_layout)
 
+        self.indicator_layout.add_widget(
+            self.status_circle
+        )
+
+        main_layout.add_widget(
+            self.indicator_layout
+        )
+
+        # =================================================
         # نص الحالة
+        # =================================================
+
         self.status_label = Label(
-            text=fix_text("Ready / جاهز"),
+            text=fix_text("جاهز"),
             font_name=ARABIC_FONT,
-            font_size='18sp',
+            font_size="18sp",
             size_hint_y=None,
             height=dp(35)
         )
-        main_layout.add_widget(self.status_label)
 
-        # منطقة عرض النصوص والردود
-        self.scroll = ScrollView(size_hint=(1, 1))
-        self.output_label = Label(
-            text=fix_text("اضغط على الزر للبدء..."),
-            font_name=ARABIC_FONT,
-            font_size='16sp',
-            size_hint_y=None,
-            halign='center',
-            valign='middle'
+        main_layout.add_widget(
+            self.status_label
         )
-        self.output_label.bind(texture_size=self.output_label.setter('size'))
-        self.scroll.add_widget(self.output_label)
-        main_layout.add_widget(self.scroll)
 
-        # زر التحدث
-        self.speak_btn = Button(
-            text=fix_text("Tap to Speak / اضغط للتحدث"),
+        # =================================================
+        # منطقة الرد
+        # =================================================
+
+        self.scroll = ScrollView(
+            size_hint=(1, 1)
+        )
+
+        self.output_label = Label(
+            text=fix_text(
+                "مرحباً، أنا 811\n"
+                "اضغط على الزر لاختبار الاتصال."
+            ),
             font_name=ARABIC_FONT,
-            font_size='18sp',
+            font_size="16sp",
+            size_hint_y=None,
+            halign="center",
+            valign="top",
+            padding=(dp(10), dp(10))
+        )
+
+        # التفاف النص
+        self.output_label.bind(
+            width=self.update_output_text_size
+        )
+
+        self.output_label.bind(
+            texture_size=self.update_output_height
+        )
+
+        self.scroll.add_widget(
+            self.output_label
+        )
+
+        main_layout.add_widget(
+            self.scroll
+        )
+
+        # =================================================
+        # زر التحدث / الاختبار
+        # =================================================
+
+        self.speak_btn = Button(
+            text=fix_text(
+                "اختبار الذكاء الاصطناعي"
+            ),
+            font_name=ARABIC_FONT,
+            font_size="18sp",
             size_hint_y=None,
             height=dp(55)
         )
-        self.speak_btn.bind(on_press=self.on_speak_click)
-        main_layout.add_widget(self.speak_btn)
+
+        self.speak_btn.bind(
+            on_press=self.on_speak_click
+        )
+
+        main_layout.add_widget(
+            self.speak_btn
+        )
+
+        # الحالة الابتدائية
+        self.set_state(
+            "ready",
+            "النظام جاهز.",
+            (0.2, 0.6, 1.0, 1.0)
+        )
 
         return main_layout
 
-    def set_state(self, state, message="", color=(0.2, 0.6, 1, 1)):
-        self.status_circle.set_color(color)
-        if state == "thinking":
-            self.status_label.text = fix_text("Thinking... / جاري التفكير")
+    # =====================================================
+    # ضبط حجم النص
+    # =====================================================
+
+    def update_output_text_size(
+        self,
+        instance,
+        width
+    ):
+        instance.text_size = (
+            max(width - dp(20), dp(50)),
+            None
+        )
+
+    def update_output_height(
+        self,
+        instance,
+        texture_size
+    ):
+        instance.height = texture_size[1] + dp(20)
+
+    # =====================================================
+    # حالات التطبيق
+    # =====================================================
+
+    def set_state(
+        self,
+        state,
+        message="",
+        color=(0.2, 0.6, 1.0, 1.0)
+    ):
+
+        self.status_circle.set_color(
+            color
+        )
+
+        if state == "ready":
+
+            self.status_label.text = fix_text(
+                "جاهز"
+            )
+
+        elif state == "thinking":
+
+            self.status_label.text = fix_text(
+                "جاري التفكير..."
+            )
+
         elif state == "speaking":
-            self.status_label.text = fix_text("Speaking... / يتكلم الآن")
+
+            self.status_label.text = fix_text(
+                "تم استلام الرد"
+            )
+
         elif state == "error":
-            self.status_label.text = fix_text("Error / خطأ في الاتصال")
+
+            self.status_label.text = fix_text(
+                "حدث خطأ"
+            )
+
+        elif state == "busy":
+
+            self.status_label.text = fix_text(
+                "جارٍ تنفيذ الطلب..."
+            )
+
         else:
-            self.status_label.text = fix_text("Ready / جاهز")
+
+            self.status_label.text = fix_text(
+                "جاهز"
+            )
 
         if message:
-            self.output_label.text = fix_text(message)
+
+            self.output_label.text = fix_text(
+                message
+            )
+
+            self.scroll.scroll_y = 1
+
+    # =====================================================
+    # الضغط على زر الاختبار
+    # =====================================================
 
     def on_speak_click(self, instance):
-        self.set_state("thinking", message="جاري إرسال الطلب...", color=(1, 0.6, 0, 1))
-        threading.Thread(target=self.process_ai_request, args=("السلام عليكم",), daemon=True).start()
 
-    def process_ai_request(self, user_prompt):
+        if self.processing:
+            return
+
+        # أخذ المفتاح في خيط الواجهة قبل بدء Thread
         groq_key = self.key_input.text.strip()
-        success, response = self.ai_engine.get_response(user_prompt, groq_key)
 
-        @mainthread
-        def update_ui():
-            if success:
-                self.set_state("speaking", message=f"أنت: {user_prompt}\n\nالذكاء الاصطناعي:\n{response}", color=(0.2, 0.8, 0.2, 1))
-            else:
-                self.set_state("error", message=response, color=(0.9, 0.2, 0.2, 1))
+        if not groq_key:
 
-        update_ui()
+            self.set_state(
+                "error",
+                "يرجى إدخال مفتاح Groq API أولاً.",
+                (0.9, 0.2, 0.2, 1.0)
+            )
 
-if __name__ == '__main__':
+            return
+
+        self.processing = True
+
+        self.speak_btn.disabled = True
+
+        self.set_state(
+            "thinking",
+            "جاري الاتصال بالذكاء الاصطناعي...",
+            (1.0, 0.6, 0.0, 1.0)
+        )
+
+        threading.Thread(
+            target=self.process_ai_request,
+            args=(groq_key,),
+            daemon=True
+        ).start()
+
+    # =====================================================
+    # تنفيذ طلب AI
+    # =====================================================
+
+    def process_ai_request(
+        self,
+        groq_key
+    ):
+
+        user_prompt = "السلام عليكم"
+
+        try:
+
+            # نستخدم AIClient الموجود أصلًا.
+            # المفتاح المدخل من المستخدم يغلب المفتاح الموجود
+            # في متغيرات البيئة لهذه الجلسة.
+
+            self.ai_engine.groq_key = (
+                groq_key.strip()
+            )
+
+            response = self.ai_engine.get_response(
+                user_prompt
+            )
+
+            if not response:
+
+                response = (
+                    "لم يتم استلام رد من الذكاء الاصطناعي."
+                )
+
+            self.update_success(
+                user_prompt,
+                response
+            )
+
+        except Exception as e:
+
+            print("AI processing error:", e)
+
+            self.update_error(
+                "حدث خطأ أثناء معالجة الطلب."
+            )
+
+    # =====================================================
+    # تحديث نجاح الطلب على Main Thread
+    # =====================================================
+
+    @mainthread
+    def update_success(
+        self,
+        user_prompt,
+        response
+    ):
+
+        self.processing = False
+
+        self.speak_btn.disabled = False
+
+        message = (
+            f"أنت:\n{user_prompt}\n\n"
+            f"811:\n{response}"
+        )
+
+        self.set_state(
+            "speaking",
+            message,
+            (0.2, 0.8, 0.2, 1.0)
+        )
+
+    # =====================================================
+    # تحديث الخطأ على Main Thread
+    # =====================================================
+
+    @mainthread
+    def update_error(
+        self,
+        message
+    ):
+
+        self.processing = False
+
+        self.speak_btn.disabled = False
+
+        self.set_state(
+            "error",
+            message,
+            (0.9, 0.2, 0.2, 1.0)
+        )
+
+
+# =========================================================
+# تشغيل التطبيق
+# =========================================================
+
+if __name__ == "__main__":
     VoiceAssistantApp().run()
