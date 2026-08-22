@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 
 from kivy.app import App
@@ -20,7 +21,7 @@ from ai_client import AIClient
 
 
 # =========================================================
-# إعداد الخط العربي
+# الخط العربي
 # =========================================================
 
 FONT_PATH = "Cairo-Regular.ttf"
@@ -33,26 +34,79 @@ if os.path.exists(FONT_PATH):
         )
         ARABIC_FONT = "Cairo"
     except Exception as e:
-        print("Font registration error:", e)
+        print("Cairo font error:", repr(e))
         ARABIC_FONT = "Roboto"
 else:
+    print("Cairo-Regular.ttf NOT FOUND")
     ARABIC_FONT = "Roboto"
 
 
+# =========================================================
+# تنظيف ومعالجة العربية
+# =========================================================
+
 def fix_text(text):
     """
-    معالجة النص العربي حتى تظهر الحروف بشكل صحيح.
+    معالجة العربية مع إزالة محارف التحكم المخفية
+    التي قد تظهر كمربعات في Kivy.
     """
+
     if text is None:
         return ""
 
     text = str(text)
 
+    # إزالة محارف التحكم الخاصة بالاتجاه RTL/LTR
+    text = re.sub(
+        r"[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]",
+        "",
+        text
+    )
+
+    # إزالة Zero Width characters غير الضرورية
+    text = re.sub(
+        r"[\u200B\u200C\u200D\uFEFF]",
+        "",
+        text
+    )
+
+    # تنظيف المسافات المتكررة
+    text = re.sub(
+        r"[ \t]+",
+        " ",
+        text
+    )
+
+    if not re.search(r"[\u0600-\u06FF]", text):
+        return text
+
     try:
-        reshaped = arabic_reshaper.reshape(text)
-        return get_display(reshaped)
+
+        reshaped = arabic_reshaper.reshape(
+            text
+        )
+
+        display_text = get_display(
+            reshaped,
+            base_dir="R"
+        )
+
+        # تنظيف إضافي بعد bidi
+        display_text = re.sub(
+            r"[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]",
+            "",
+            display_text
+        )
+
+        return display_text
+
     except Exception as e:
-        print("Arabic text error:", e)
+
+        print(
+            "Arabic processing error:",
+            repr(e)
+        )
+
         return text
 
 
@@ -61,10 +115,12 @@ def fix_text(text):
 # =========================================================
 
 def request_android_permissions():
+
     if platform != "android":
         return
 
     try:
+
         from android.permissions import (
             request_permissions,
             Permission
@@ -77,21 +133,40 @@ def request_android_permissions():
             Permission.MODIFY_AUDIO_SETTINGS,
         ]
 
-        # صلاحيات Bluetooth تختلف حسب إصدار Android.
-        # نضيف ما هو متاح فقط.
-        if hasattr(Permission, "BLUETOOTH"):
-            permissions.append(Permission.BLUETOOTH)
+        if hasattr(
+            Permission,
+            "BLUETOOTH"
+        ):
+            permissions.append(
+                Permission.BLUETOOTH
+            )
 
-        if hasattr(Permission, "BLUETOOTH_ADMIN"):
-            permissions.append(Permission.BLUETOOTH_ADMIN)
+        if hasattr(
+            Permission,
+            "BLUETOOTH_ADMIN"
+        ):
+            permissions.append(
+                Permission.BLUETOOTH_ADMIN
+            )
 
-        if hasattr(Permission, "BLUETOOTH_CONNECT"):
-            permissions.append(Permission.BLUETOOTH_CONNECT)
+        if hasattr(
+            Permission,
+            "BLUETOOTH_CONNECT"
+        ):
+            permissions.append(
+                Permission.BLUETOOTH_CONNECT
+            )
 
-        request_permissions(permissions)
+        request_permissions(
+            permissions
+        )
 
     except Exception as e:
-        print("Permission error:", e)
+
+        print(
+            "Permission error:",
+            repr(e)
+        )
 
 
 # =========================================================
@@ -101,6 +176,7 @@ def request_android_permissions():
 class CircleWidget(BoxLayout):
 
     def __init__(self, **kwargs):
+
         super().__init__(**kwargs)
 
         self.color = (
@@ -116,7 +192,9 @@ class CircleWidget(BoxLayout):
         )
 
     def set_color(self, new_color):
+
         self.color = new_color
+
         self.update_canvas()
 
     def update_canvas(self, *args):
@@ -147,25 +225,18 @@ class CircleWidget(BoxLayout):
 
 
 # =========================================================
-# التطبيق الرئيسي
+# التطبيق
 # =========================================================
 
 class VoiceAssistantApp(App):
 
     def build(self):
 
-        # طلب الصلاحيات
         request_android_permissions()
 
-        # العميل الموحد للذكاء الاصطناعي
         self.ai_engine = AIClient()
 
-        # منع إرسال أكثر من طلب في نفس الوقت
         self.processing = False
-
-        # =================================================
-        # التصميم الرئيسي
-        # =================================================
 
         main_layout = BoxLayout(
             orientation="vertical",
@@ -173,9 +244,9 @@ class VoiceAssistantApp(App):
             spacing=dp(10)
         )
 
-        # =================================================
+        # =====================================================
         # العنوان
-        # =================================================
+        # =====================================================
 
         self.title_label = Label(
             text="VOICE ASSISTANT 811",
@@ -189,9 +260,9 @@ class VoiceAssistantApp(App):
             self.title_label
         )
 
-        # =================================================
+        # =====================================================
         # مفتاح Groq
-        # =================================================
+        # =====================================================
 
         self.key_input = TextInput(
             hint_text="Paste Groq API Key here...",
@@ -205,9 +276,9 @@ class VoiceAssistantApp(App):
             self.key_input
         )
 
-        # =================================================
+        # =====================================================
         # مؤشر الحالة
-        # =================================================
+        # =====================================================
 
         self.indicator_layout = BoxLayout(
             size_hint_y=None,
@@ -224,25 +295,36 @@ class VoiceAssistantApp(App):
             self.indicator_layout
         )
 
-        # =================================================
-        # نص الحالة
-        # =================================================
+        # =====================================================
+        # الحالة
+        # =====================================================
 
         self.status_label = Label(
             text=fix_text("جاهز"),
             font_name=ARABIC_FONT,
             font_size="18sp",
             size_hint_y=None,
-            height=dp(35)
+            height=dp(40),
+            halign="center",
+            valign="middle"
+        )
+
+        self.status_label.bind(
+            width=lambda instance, value:
+            setattr(
+                instance,
+                "text_size",
+                (value, None)
+            )
         )
 
         main_layout.add_widget(
             self.status_label
         )
 
-        # =================================================
+        # =====================================================
         # منطقة الرد
-        # =================================================
+        # =====================================================
 
         self.scroll = ScrollView(
             size_hint=(1, 1)
@@ -250,20 +332,23 @@ class VoiceAssistantApp(App):
 
         self.output_label = Label(
             text=fix_text(
-                "مرحباً، أنا 811\n"
-                "اضغط على الزر لاختبار الاتصال."
+                "مرحباً\n"
+                "أنا 811\n"
+                "اختبر الاتصال بالذكاء الاصطناعي"
             ),
             font_name=ARABIC_FONT,
-            font_size="16sp",
+            font_size="17sp",
             size_hint_y=None,
             halign="center",
             valign="top",
-            padding=(dp(10), dp(10))
+            padding=(
+                dp(10),
+                dp(10)
+            )
         )
 
-        # التفاف النص
         self.output_label.bind(
-            width=self.update_output_text_size
+            width=self.update_output_width
         )
 
         self.output_label.bind(
@@ -278,9 +363,9 @@ class VoiceAssistantApp(App):
             self.scroll
         )
 
-        # =================================================
-        # زر التحدث / الاختبار
-        # =================================================
+        # =====================================================
+        # الزر
+        # =====================================================
 
         self.speak_btn = Button(
             text=fix_text(
@@ -289,7 +374,7 @@ class VoiceAssistantApp(App):
             font_name=ARABIC_FONT,
             font_size="18sp",
             size_hint_y=None,
-            height=dp(55)
+            height=dp(60)
         )
 
         self.speak_btn.bind(
@@ -303,23 +388,32 @@ class VoiceAssistantApp(App):
         # الحالة الابتدائية
         self.set_state(
             "ready",
-            "النظام جاهز.",
-            (0.2, 0.6, 1.0, 1.0)
+            "النظام جاهز",
+            (
+                0.2,
+                0.6,
+                1.0,
+                1.0
+            )
         )
 
         return main_layout
 
     # =====================================================
-    # ضبط حجم النص
+    # حجم النص
     # =====================================================
 
-    def update_output_text_size(
+    def update_output_width(
         self,
         instance,
         width
     ):
+
         instance.text_size = (
-            max(width - dp(20), dp(50)),
+            max(
+                width - dp(20),
+                dp(80)
+            ),
             None
         )
 
@@ -328,17 +422,26 @@ class VoiceAssistantApp(App):
         instance,
         texture_size
     ):
-        instance.height = texture_size[1] + dp(20)
+
+        instance.height = (
+            texture_size[1]
+            + dp(30)
+        )
 
     # =====================================================
-    # حالات التطبيق
+    # حالات المساعد
     # =====================================================
 
     def set_state(
         self,
         state,
         message="",
-        color=(0.2, 0.6, 1.0, 1.0)
+        color=(
+            0.2,
+            0.6,
+            1.0,
+            1.0
+        )
     ):
 
         self.status_circle.set_color(
@@ -347,39 +450,31 @@ class VoiceAssistantApp(App):
 
         if state == "ready":
 
-            self.status_label.text = fix_text(
-                "جاهز"
-            )
+            status = "جاهز"
 
         elif state == "thinking":
 
-            self.status_label.text = fix_text(
-                "جاري التفكير..."
-            )
+            status = "جاري التفكير..."
 
         elif state == "speaking":
 
-            self.status_label.text = fix_text(
-                "تم استلام الرد"
-            )
+            status = "تم استلام الرد"
 
         elif state == "error":
 
-            self.status_label.text = fix_text(
-                "حدث خطأ"
-            )
+            status = "حدث خطأ"
 
         elif state == "busy":
 
-            self.status_label.text = fix_text(
-                "جارٍ تنفيذ الطلب..."
-            )
+            status = "جارٍ التنفيذ..."
 
         else:
 
-            self.status_label.text = fix_text(
-                "جاهز"
-            )
+            status = "جاهز"
+
+        self.status_label.text = fix_text(
+            status
+        )
 
         if message:
 
@@ -390,23 +485,32 @@ class VoiceAssistantApp(App):
             self.scroll.scroll_y = 1
 
     # =====================================================
-    # الضغط على زر الاختبار
+    # الضغط على الزر
     # =====================================================
 
-    def on_speak_click(self, instance):
+    def on_speak_click(
+        self,
+        instance
+    ):
 
         if self.processing:
             return
 
-        # أخذ المفتاح في خيط الواجهة قبل بدء Thread
-        groq_key = self.key_input.text.strip()
+        groq_key = (
+            self.key_input.text.strip()
+        )
 
         if not groq_key:
 
             self.set_state(
                 "error",
-                "يرجى إدخال مفتاح Groq API أولاً.",
-                (0.9, 0.2, 0.2, 1.0)
+                "يرجى إدخال مفتاح Groq API",
+                (
+                    0.9,
+                    0.2,
+                    0.2,
+                    1.0
+                )
             )
 
             return
@@ -418,7 +522,12 @@ class VoiceAssistantApp(App):
         self.set_state(
             "thinking",
             "جاري الاتصال بالذكاء الاصطناعي...",
-            (1.0, 0.6, 0.0, 1.0)
+            (
+                1.0,
+                0.6,
+                0.0,
+                1.0
+            )
         )
 
         threading.Thread(
@@ -428,7 +537,7 @@ class VoiceAssistantApp(App):
         ).start()
 
     # =====================================================
-    # تنفيذ طلب AI
+    # طلب الذكاء الاصطناعي
     # =====================================================
 
     def process_ai_request(
@@ -440,22 +549,20 @@ class VoiceAssistantApp(App):
 
         try:
 
-            # نستخدم AIClient الموجود أصلًا.
-            # المفتاح المدخل من المستخدم يغلب المفتاح الموجود
-            # في متغيرات البيئة لهذه الجلسة.
-
             self.ai_engine.groq_key = (
-                groq_key.strip()
+                groq_key
             )
 
-            response = self.ai_engine.get_response(
-                user_prompt
+            response = (
+                self.ai_engine.get_response(
+                    user_prompt
+                )
             )
 
             if not response:
 
                 response = (
-                    "لم يتم استلام رد من الذكاء الاصطناعي."
+                    "لم يتم استلام رد."
                 )
 
             self.update_success(
@@ -465,14 +572,17 @@ class VoiceAssistantApp(App):
 
         except Exception as e:
 
-            print("AI processing error:", e)
+            print(
+                "AI processing error:",
+                repr(e)
+            )
 
             self.update_error(
-                "حدث خطأ أثناء معالجة الطلب."
+                "حدث خطأ أثناء معالجة الطلب"
             )
 
     # =====================================================
-    # تحديث نجاح الطلب على Main Thread
+    # نجاح
     # =====================================================
 
     @mainthread
@@ -487,18 +597,26 @@ class VoiceAssistantApp(App):
         self.speak_btn.disabled = False
 
         message = (
-            f"أنت:\n{user_prompt}\n\n"
-            f"811:\n{response}"
+            "أنت:\n"
+            + user_prompt
+            + "\n\n"
+            + "811:\n"
+            + response
         )
 
         self.set_state(
             "speaking",
             message,
-            (0.2, 0.8, 0.2, 1.0)
+            (
+                0.2,
+                0.8,
+                0.2,
+                1.0
+            )
         )
 
     # =====================================================
-    # تحديث الخطأ على Main Thread
+    # خطأ
     # =====================================================
 
     @mainthread
@@ -514,7 +632,12 @@ class VoiceAssistantApp(App):
         self.set_state(
             "error",
             message,
-            (0.9, 0.2, 0.2, 1.0)
+            (
+                0.9,
+                0.2,
+                0.2,
+                1.0
+            )
         )
 
 
