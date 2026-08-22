@@ -1,6 +1,7 @@
 import os
 import re
 import threading
+import unicodedata
 
 from kivy.app import App
 from kivy.clock import mainthread
@@ -24,7 +25,8 @@ from ai_client import AIClient
 # الخط العربي
 # =========================================================
 
-FONT_PATH = "Cairo-Regular.ttf"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_PATH = os.path.join(BASE_DIR, "Cairo-Regular.ttf")
 
 if os.path.exists(FONT_PATH):
     try:
@@ -33,22 +35,23 @@ if os.path.exists(FONT_PATH):
             fn_regular=FONT_PATH
         )
         ARABIC_FONT = "Cairo"
+        print("Cairo font loaded successfully")
     except Exception as e:
         print("Cairo font error:", repr(e))
         ARABIC_FONT = "Roboto"
 else:
-    print("Cairo-Regular.ttf NOT FOUND")
+    print("Cairo-Regular.ttf NOT FOUND:", FONT_PATH)
     ARABIC_FONT = "Roboto"
 
 
 # =========================================================
-# تنظيف ومعالجة العربية
+# تنظيف ومعالجة النص العربي
 # =========================================================
 
-def fix_text(text):
+def clean_unicode(text):
     """
-    معالجة العربية مع إزالة محارف التحكم المخفية
-    التي قد تظهر كمربعات في Kivy.
+    إزالة محارف Unicode المخفية ومحارف التحكم
+    التي قد تظهر كمربعات □ داخل Kivy.
     """
 
     if text is None:
@@ -56,47 +59,74 @@ def fix_text(text):
 
     text = str(text)
 
-    # إزالة محارف التحكم الخاصة بالاتجاه RTL/LTR
+    cleaned = []
+
+    for char in text:
+
+        category = unicodedata.category(char)
+
+        # إزالة محارف التنسيق والتحكم
+        if category in ("Cf", "Cc"):
+            # نُبقي على newline و tab
+            if char not in ("\n", "\t"):
+                continue
+
+        cleaned.append(char)
+
+    text = "".join(cleaned)
+
+    # إزالة بعض محارف الاتجاه المعروفة
     text = re.sub(
         r"[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]",
         "",
         text
     )
 
-    # إزالة Zero Width characters غير الضرورية
+    # إزالة Zero Width characters
     text = re.sub(
         r"[\u200B\u200C\u200D\uFEFF]",
         "",
         text
     )
 
-    # تنظيف المسافات المتكررة
+    # تنظيف المسافات
     text = re.sub(
         r"[ \t]+",
         " ",
         text
     )
 
+    return text.strip()
+
+
+def fix_text(text):
+    """
+    تجهيز النص العربي للعرض الصحيح داخل Kivy.
+    """
+
+    if text is None:
+        return ""
+
+    text = clean_unicode(text)
+
+    if not text:
+        return ""
+
+    # إذا لم يوجد عربي، نعيد النص كما هو
     if not re.search(r"[\u0600-\u06FF]", text):
         return text
 
     try:
 
-        reshaped = arabic_reshaper.reshape(
-            text
-        )
+        reshaped = arabic_reshaper.reshape(text)
 
         display_text = get_display(
             reshaped,
             base_dir="R"
         )
 
-        # تنظيف إضافي بعد bidi
-        display_text = re.sub(
-            r"[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]",
-            "",
-            display_text
-        )
+        # تنظيف أخير لأي محارف تحكم ظهرت
+        display_text = clean_unicode(display_text)
 
         return display_text
 
@@ -133,26 +163,17 @@ def request_android_permissions():
             Permission.MODIFY_AUDIO_SETTINGS,
         ]
 
-        if hasattr(
-            Permission,
-            "BLUETOOTH"
-        ):
+        if hasattr(Permission, "BLUETOOTH"):
             permissions.append(
                 Permission.BLUETOOTH
             )
 
-        if hasattr(
-            Permission,
-            "BLUETOOTH_ADMIN"
-        ):
+        if hasattr(Permission, "BLUETOOTH_ADMIN"):
             permissions.append(
                 Permission.BLUETOOTH_ADMIN
             )
 
-        if hasattr(
-            Permission,
-            "BLUETOOTH_CONNECT"
-        ):
+        if hasattr(Permission, "BLUETOOTH_CONNECT"):
             permissions.append(
                 Permission.BLUETOOTH_CONNECT
             )
@@ -160,6 +181,8 @@ def request_android_permissions():
         request_permissions(
             permissions
         )
+
+        print("Android permissions requested")
 
     except Exception as e:
 
@@ -306,7 +329,8 @@ class VoiceAssistantApp(App):
             size_hint_y=None,
             height=dp(40),
             halign="center",
-            valign="middle"
+            valign="middle",
+            markup=False
         )
 
         self.status_label.bind(
@@ -344,7 +368,8 @@ class VoiceAssistantApp(App):
             padding=(
                 dp(10),
                 dp(10)
-            )
+            ),
+            markup=False
         )
 
         self.output_label.bind(
@@ -364,7 +389,7 @@ class VoiceAssistantApp(App):
         )
 
         # =====================================================
-        # الزر
+        # زر اختبار الذكاء الاصطناعي
         # =====================================================
 
         self.speak_btn = Button(
@@ -374,7 +399,8 @@ class VoiceAssistantApp(App):
             font_name=ARABIC_FONT,
             font_size="18sp",
             size_hint_y=None,
-            height=dp(60)
+            height=dp(60),
+            markup=False
         )
 
         self.speak_btn.bind(
@@ -385,7 +411,10 @@ class VoiceAssistantApp(App):
             self.speak_btn
         )
 
+        # =====================================================
         # الحالة الابتدائية
+        # =====================================================
+
         self.set_state(
             "ready",
             "النظام جاهز",
@@ -549,9 +578,12 @@ class VoiceAssistantApp(App):
 
         try:
 
-            self.ai_engine.groq_key = (
-                groq_key
-            )
+            print("=" * 50)
+            print("811 AI TEST START")
+            print("Prompt:", user_prompt)
+            print("Groq key received:", bool(groq_key))
+
+            self.ai_engine.groq_key = groq_key
 
             response = (
                 self.ai_engine.get_response(
@@ -559,10 +591,12 @@ class VoiceAssistantApp(App):
                 )
             )
 
+            print("AI response:", repr(response))
+
             if not response:
 
                 response = (
-                    "لم يتم استلام رد."
+                    "لم يتم استلام رد من الذكاء الاصطناعي."
                 )
 
             self.update_success(
@@ -572,13 +606,19 @@ class VoiceAssistantApp(App):
 
         except Exception as e:
 
-            print(
-                "AI processing error:",
-                repr(e)
-            )
+            # مهم جداً لمعرفة الخطأ الحقيقي في Logcat
+            print("=" * 50)
+            print("811 AI ERROR")
+            print("Exception type:", type(e).__name__)
+            print("Exception:", repr(e))
+            print("Exception text:", str(e))
+            print("=" * 50)
 
             self.update_error(
-                "حدث خطأ أثناء معالجة الطلب"
+                "تعذر الاتصال بمحرك الذكاء الاصطناعي\n\n"
+                + type(e).__name__
+                + ": "
+                + str(e)
             )
 
     # =====================================================
@@ -601,7 +641,7 @@ class VoiceAssistantApp(App):
             + user_prompt
             + "\n\n"
             + "811:\n"
-            + response
+            + str(response)
         )
 
         self.set_state(
