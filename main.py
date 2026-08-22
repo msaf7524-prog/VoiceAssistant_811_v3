@@ -1,5 +1,30 @@
 import os
 import threading
+import requests
+
+# 1. تنزيل الخط العربي تلقائياً وتسجيله في Kivy قبل بناء الواجهة
+FONT_PATH = "Cairo-Regular.ttf"
+FONT_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/cairo/static/Cairo-Regular.ttf"
+
+def prepare_arabic_font():
+    if not os.path.exists(FONT_PATH):
+        try:
+            print("Downloading Arabic font...")
+            res = requests.get(FONT_URL, timeout=15)
+            if res.status_code == 200:
+                with open(FONT_PATH, "wb") as f:
+                    f.write(res.content)
+                print("Arabic font downloaded successfully!")
+        except Exception as e:
+            print(f"Font download error: {e}")
+
+prepare_arabic_font()
+
+from kivy.core.text import LabelBase
+if os.path.exists(FONT_PATH):
+    # استبدال الخط الافتراضي بالنظام بالخط العربي
+    LabelBase.register(name='Roboto', fn_regular=FONT_PATH)
+
 import arabic_reshaper
 from bidi.algorithm import get_display
 
@@ -11,12 +36,11 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.utils import platform
 
-# استيراد عميل الذكاء الاصطناعي
 from ai_client import AIClient
 
 
 def fix_text(text):
-    """إصلاح تشكيل اتجاه النص العربي لعرضه في Kivy"""
+    """معالجة وتعديل اتجاه النص العربي"""
     if not text:
         return ""
     try:
@@ -32,7 +56,7 @@ class VoiceAssistantApp(App):
         self.ai_client = None
         self.tts = None
 
-        # تهيئة محرك النطق الخاص بأندرويد عند بدء التطبيق
+        # تهيئة محرك الصوت في الأندرويد
         if platform == 'android':
             self.init_android_tts()
 
@@ -77,7 +101,7 @@ class VoiceAssistantApp(App):
         return layout
 
     def init_android_tts(self):
-        """تهيئة محرك Android TextToSpeech المباشر"""
+        """تهيئة محرك TextToSpeech المباشر في أندرويد"""
         try:
             from jnius import autoclass
             PythonActivity = autoclass('org.kivy.android.PythonActivity')
@@ -91,7 +115,7 @@ class VoiceAssistantApp(App):
             print(f"Android TTS Init Error: {e}")
 
     def speak(self, text):
-        """إرسال النص إلى محرك الصوت بالنظام"""
+        """نطق النص عبر محرك أندرويد الصوتي"""
         if platform == 'android' and self.tts:
             try:
                 from jnius import autoclass
@@ -99,8 +123,6 @@ class VoiceAssistantApp(App):
                 self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, None, None)
             except Exception as e:
                 print(f"Speak Execution Error: {e}")
-        else:
-            print(f"[Desktop Simulation Voice Output]: {text}")
 
     def start_ai_test(self, instance):
         api_key = self.api_input.text.strip()
@@ -111,20 +133,19 @@ class VoiceAssistantApp(App):
         self.status_label.text = fix_text("جاري التفكير...")
         self.btn_test.disabled = True
 
-        # تشغيل طلب الذكاء الاصطناعي في Thread مستقل
-        threading.Thread(target=self._process_ai_request, args=(api_key,)).start()
+        threading.Thread(target=self._process_ai_request, args=(api_key,), daemon=True).start()
 
-        def _process_ai_request(self, api_key):
-            try:
-                if not self.ai_client:
-                    self.ai_client = AIClient(groq_key=api_key)
+    def _process_ai_request(self, api_key):
+        try:
+            if not self.ai_client:
+                self.ai_client = AIClient(groq_key=api_key)
 
-                prompt = "السلام عليكم"
-                response_text = self.ai_client.get_response(prompt)
+            prompt = "السلام عليكم"
+            response_text = self.ai_client.get_response(prompt)
 
-                Clock.schedule_once(lambda dt: self._update_ui_and_speak(prompt, response_text))
-            except Exception as e:
-                Clock.schedule_once(lambda dt: self._handle_error(str(e)))
+            Clock.schedule_once(lambda dt: self._update_ui_and_speak(prompt, response_text))
+        except Exception as e:
+            Clock.schedule_once(lambda dt: self._handle_error(str(e)))
 
     def _update_ui_and_speak(self, prompt, response):
         self.status_label.text = fix_text("تم استقبال الرد")
@@ -132,7 +153,7 @@ class VoiceAssistantApp(App):
         self.chat_label.text = fix_text(display_chat)
         self.btn_test.disabled = False
 
-        # نطق الإجابة صوتاً فور استلامها
+        # تشغيل الصوت تلقائياً فور استلام الرد
         self.speak(response)
 
     def _handle_error(self, error_msg):
