@@ -23,6 +23,13 @@ from ai_client import AIClient
 
 
 # =========================================================
+# VERSION
+# =========================================================
+
+__version__ = "0.2.0"
+
+
+# =========================================================
 # PATHS
 # =========================================================
 
@@ -69,7 +76,7 @@ else:
 
 
 # =========================================================
-# ARABIC TEXT CLEANING
+# UNICODE CLEANING
 # =========================================================
 
 HIDDEN_UNICODE = (
@@ -93,11 +100,6 @@ HIDDEN_UNICODE = (
 
 
 def clean_unicode(text):
-    """
-    تنظيف محارف Unicode المخفية ومحارف التحكم
-    مع الحفاظ على الأسطر والفواصل.
-    """
-
     if text is None:
         return ""
 
@@ -142,19 +144,11 @@ def clean_unicode(text):
 
 
 def fix_text(text):
-    """
-    تجهيز النص العربي للعرض الصحيح
-    داخل Kivy.
-    """
-
-    clean_text = clean_unicode(
-        text
-    )
+    clean_text = clean_unicode(text)
 
     if not clean_text:
         return ""
 
-    # النص غير العربي لا يحتاج bidi
     if not re.search(
         r"[\u0600-\u06FF]",
         clean_text
@@ -185,16 +179,7 @@ def fix_text(text):
 
 
 def clean_for_speech(text):
-    """
-    النص الذي يذهب إلى TTS.
-    مهم جدًا:
-    لا نستخدم fix_text هنا لأن fix_text
-    مخصص للعرض فقط.
-    """
-
-    text = clean_unicode(
-        text
-    )
+    text = clean_unicode(text)
 
     if not text:
         return ""
@@ -292,7 +277,6 @@ def request_android_permissions():
 class StatusOrb(Widget):
 
     def __init__(self, **kwargs):
-
         super().__init__(**kwargs)
 
         self.status_color = (
@@ -307,15 +291,7 @@ class StatusOrb(Widget):
             size=self._redraw
         )
 
-        Clock.schedule_once(
-            lambda dt: self._redraw(),
-            0
-        )
-
-    def set_state(
-        self,
-        state
-    ):
+    def set_state(self, state):
 
         colors = {
 
@@ -362,10 +338,7 @@ class StatusOrb(Widget):
 
         self._redraw()
 
-    def _redraw(
-        self,
-        *args
-    ):
+    def _redraw(self, *args):
 
         self.canvas.clear()
 
@@ -387,7 +360,6 @@ class StatusOrb(Widget):
                 ) * 0.22
             )
 
-            # Outer glow
             Color(
                 self.status_color[0],
                 self.status_color[1],
@@ -406,7 +378,6 @@ class StatusOrb(Widget):
                 )
             )
 
-            # Inner glow
             Color(
                 self.status_color[0],
                 self.status_color[1],
@@ -425,7 +396,6 @@ class StatusOrb(Widget):
                 )
             )
 
-            # Main orb
             Color(
                 *self.status_color
             )
@@ -441,7 +411,6 @@ class StatusOrb(Widget):
                 )
             )
 
-            # Inner ring
             Color(
                 1,
                 1,
@@ -480,23 +449,26 @@ class VoiceAssistantApp(App):
         self.ai_engine = None
 
         # -------------------------
-        # Android TTS
+        # TTS
         # -------------------------
 
         self.tts = None
         self.tts_ready = False
         self.tts_language_ready = False
-
         self._tts_listener = None
 
         # -------------------------
-        # Android SpeechRecognizer
+        # SpeechRecognizer
         # -------------------------
 
         self.speech_recognizer = None
         self.speech_recognizer_ready = False
         self.is_listening = False
+
         self._speech_listener = None
+        self._speech_autoclass = None
+
+        self.speech_init_error = ""
 
         # -------------------------
         # UI
@@ -507,7 +479,7 @@ class VoiceAssistantApp(App):
         request_android_permissions()
 
         # =================================================
-        # AI CLIENT
+        # AI
         # =================================================
 
         try:
@@ -544,9 +516,7 @@ class VoiceAssistantApp(App):
                 RoundedRectangle(
                     pos=root.pos,
                     size=root.size,
-                    radius=[
-                        dp(0)
-                    ]
+                    radius=[0]
                 )
             )
 
@@ -569,7 +539,7 @@ class VoiceAssistantApp(App):
         )
 
         # =================================================
-        # MAIN CONTAINER
+        # MAIN
         # =================================================
 
         main = BoxLayout(
@@ -640,7 +610,7 @@ class VoiceAssistantApp(App):
         )
 
         # =================================================
-        # GROQ KEY
+        # GROQ
         # =================================================
 
         key_container = BoxLayout(
@@ -742,7 +712,7 @@ class VoiceAssistantApp(App):
         )
 
         # =================================================
-        # CHAT AREA
+        # CHAT
         # =================================================
 
         chat_panel = BoxLayout(
@@ -886,8 +856,9 @@ class VoiceAssistantApp(App):
         self.footer_label = Label(
             text=fix_text(
                 "Speech Recognition • "
-                "Local Native TTS • "
-                "Cairo Arabic • Groq AI"
+                "Native TTS • "
+                "Cairo Arabic • "
+                "Groq AI"
             ),
             font_name=self.arabic_font,
             font_size="11sp",
@@ -920,17 +891,9 @@ class VoiceAssistantApp(App):
             main
         )
 
-        # =================================================
-        # INITIAL STATE
-        # =================================================
-
         self.set_state(
             "ready"
         )
-
-        # =================================================
-        # ANDROID AUDIO INITIALIZATION
-        # =================================================
 
         if platform == "android":
 
@@ -949,7 +912,7 @@ class VoiceAssistantApp(App):
         return root
 
     # =====================================================
-    # OUTPUT SIZING
+    # UI SIZING
     # =====================================================
 
     def _update_output_width(
@@ -978,7 +941,7 @@ class VoiceAssistantApp(App):
         )
 
     # =====================================================
-    # STATE
+    # STATES
     # =====================================================
 
     def set_state(
@@ -987,76 +950,71 @@ class VoiceAssistantApp(App):
         message=None
     ):
 
-        state_text = {
+        states = {
 
-            "ready": "جاهز",
+            "ready": {
+                "text": "جاهز",
+                "color": (
+                    0.30,
+                    0.75,
+                    1.0,
+                    1.0
+                )
+            },
 
-            "listening":
-                "جاري الاستماع...",
+            "listening": {
+                "text": "جاري الاستماع...",
+                "color": (
+                    0.10,
+                    0.85,
+                    0.90,
+                    1.0
+                )
+            },
 
-            "thinking":
-                "جاري التفكير...",
+            "thinking": {
+                "text": "جاري التفكير...",
+                "color": (
+                    1.0,
+                    0.65,
+                    0.12,
+                    1.0
+                )
+            },
 
-            "speaking":
-                "811 يتحدث الآن",
+            "speaking": {
+                "text": "811 يتحدث الآن",
+                "color": (
+                    0.20,
+                    0.85,
+                    0.35,
+                    1.0
+                )
+            },
 
-            "error":
-                "حدث خطأ"
+            "error": {
+                "text": "حدث خطأ",
+                "color": (
+                    1.0,
+                    0.28,
+                    0.30,
+                    1.0
+                )
+            }
         }
 
-        state_colors = {
-
-            "ready": (
-                0.30,
-                0.75,
-                1.0,
-                1.0
-            ),
-
-            "listening": (
-                0.10,
-                0.85,
-                0.90,
-                1.0
-            ),
-
-            "thinking": (
-                1.0,
-                0.65,
-                0.12,
-                1.0
-            ),
-
-            "speaking": (
-                0.20,
-                0.85,
-                0.35,
-                1.0
-            ),
-
-            "error": (
-                1.0,
-                0.28,
-                0.30,
-                1.0
-            )
-        }
-
-        status = state_text.get(
+        current = states.get(
             state,
-            "جاهز"
-        )
-
-        color = state_colors.get(
-            state,
-            state_colors["ready"]
+            states["ready"]
         )
 
         self.status_label.text = fix_text(
-            status
+            current["text"]
         )
 
-        self.status_label.color = color
+        self.status_label.color = (
+            current["color"]
+        )
 
         self.status_orb.set_state(
             state
@@ -1080,7 +1038,6 @@ class VoiceAssistantApp(App):
                 0
             )
 
-        # Button behavior
         if state == "listening":
 
             self.speak_btn.text = fix_text(
@@ -1147,7 +1104,82 @@ class VoiceAssistantApp(App):
             )
 
     # =====================================================
-    # ANDROID NATIVE TTS
+    # ANDROID MAIN THREAD HELPER
+    # =====================================================
+
+    def _run_on_android_ui(
+        self,
+        func
+    ):
+
+        if platform != "android":
+            func()
+            return
+
+        try:
+
+            from jnius import (
+                PythonJavaClass,
+                java_method,
+                autoclass
+            )
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            activity = (
+                PythonActivity.mActivity
+            )
+
+            if activity is None:
+
+                func()
+
+                return
+
+            outer = self
+
+            class UiRunnable(
+                PythonJavaClass
+            ):
+
+                __javainterfaces__ = [
+                    "java/lang/Runnable"
+                ]
+
+                @java_method("()V")
+                def run(self):
+
+                    try:
+                        func()
+
+                    except Exception as exc:
+
+                        print(
+                            "811: Android UI Runnable error:",
+                            repr(exc)
+                        )
+
+            runnable = UiRunnable()
+
+            self._last_ui_runnable = runnable
+
+            activity.runOnUiThread(
+                runnable
+            )
+
+        except Exception as exc:
+
+            print(
+                "811: runOnUiThread error:",
+                repr(exc)
+            )
+
+            func()
+
+    # =====================================================
+    # NATIVE TTS
     # =====================================================
 
     def init_native_tts(
@@ -1155,11 +1187,6 @@ class VoiceAssistantApp(App):
     ):
 
         if platform != "android":
-
-            print(
-                "811: Native TTS is Android-only"
-            )
-
             return
 
         try:
@@ -1187,11 +1214,6 @@ class VoiceAssistantApp(App):
             )
 
             if activity is None:
-
-                print(
-                    "811: Android activity unavailable"
-                )
-
                 return
 
             outer = self
@@ -1229,7 +1251,9 @@ class VoiceAssistantApp(App):
 
                         outer.tts_ready = True
 
-                        candidates = [
+                        outer.tts_language_ready = False
+
+                        locales = [
                             Locale(
                                 "ar",
                                 "IQ"
@@ -1243,13 +1267,11 @@ class VoiceAssistantApp(App):
                             )
                         ]
 
-                        outer.tts_language_ready = False
-
-                        for locale in candidates:
+                        for locale in locales:
 
                             try:
 
-                                availability = (
+                                available = (
                                     outer.tts
                                     .isLanguageAvailable(
                                         locale
@@ -1257,7 +1279,7 @@ class VoiceAssistantApp(App):
                                 )
 
                                 if (
-                                    availability
+                                    available
                                     >=
                                     TextToSpeech
                                     .LANG_AVAILABLE
@@ -1295,13 +1317,6 @@ class VoiceAssistantApp(App):
                                     )
                                 )
 
-                        if not outer.tts_language_ready:
-
-                            print(
-                                "811: Arabic TTS "
-                                "language unavailable"
-                            )
-
                         try:
 
                             outer.tts.setSpeechRate(
@@ -1309,17 +1324,11 @@ class VoiceAssistantApp(App):
                             )
 
                             outer.tts.setPitch(
-                                1.00
+                                1.0
                             )
 
-                        except Exception as rate_exc:
-
-                            print(
-                                "811: TTS rate/pitch error:",
-                                repr(
-                                    rate_exc
-                                )
-                            )
+                        except Exception:
+                            pass
 
                     except Exception as exc:
 
@@ -1327,9 +1336,7 @@ class VoiceAssistantApp(App):
 
                         print(
                             "811: TTS callback error:",
-                            repr(
-                                exc
-                            )
+                            repr(exc)
                         )
 
             self._tts_listener = (
@@ -1348,11 +1355,13 @@ class VoiceAssistantApp(App):
         except Exception as exc:
 
             self.tts = None
+
             self.tts_ready = False
+
             self.tts_language_ready = False
 
             print(
-                "811: Native TTS initialization error:",
+                "811: Native TTS init error:",
                 repr(exc)
             )
 
@@ -1371,26 +1380,16 @@ class VoiceAssistantApp(App):
             return
 
         if not self.tts_ready:
-
-            print(
-                "811: TTS is not ready"
-            )
-
             return
 
         if not self.tts_language_ready:
-
-            print(
-                "811: Arabic TTS unavailable"
-            )
-
             return
 
-        clean_text = clean_for_speech(
+        text = clean_for_speech(
             text
         )
 
-        if not clean_text:
+        if not text:
             return
 
         try:
@@ -1411,7 +1410,7 @@ class VoiceAssistantApp(App):
             ):
 
                 self.tts.speak(
-                    clean_text,
+                    text,
                     TextToSpeech.QUEUE_FLUSH,
                     None,
                     "811_utterance"
@@ -1420,14 +1419,10 @@ class VoiceAssistantApp(App):
             else:
 
                 self.tts.speak(
-                    clean_text,
+                    text,
                     TextToSpeech.QUEUE_FLUSH,
                     None
                 )
-
-            print(
-                "811: TTS speak executed"
-            )
 
         except Exception as exc:
 
@@ -1437,7 +1432,7 @@ class VoiceAssistantApp(App):
             )
 
     # =====================================================
-    # ANDROID SPEECH RECOGNIZER
+    # SPEECH RECOGNIZER INITIALIZATION
     # =====================================================
 
     def init_native_speech(
@@ -1445,12 +1440,16 @@ class VoiceAssistantApp(App):
     ):
 
         if platform != "android":
-
-            print(
-                "811: SpeechRecognizer is Android-only"
-            )
-
             return
+
+        # Everything below is forced to Android UI thread.
+        self._run_on_android_ui(
+            self._init_native_speech_on_ui
+        )
+
+    def _init_native_speech_on_ui(
+        self
+    ):
 
         try:
 
@@ -1458,6 +1457,10 @@ class VoiceAssistantApp(App):
                 autoclass,
                 PythonJavaClass,
                 java_method
+            )
+
+            self._speech_autoclass = (
+                autoclass
             )
 
             PythonActivity = autoclass(
@@ -1473,6 +1476,18 @@ class VoiceAssistantApp(App):
             )
 
             if activity is None:
+
+                self.speech_recognizer_ready = False
+
+                self.speech_init_error = (
+                    "Android Activity unavailable"
+                )
+
+                print(
+                    "811:",
+                    self.speech_init_error
+                )
+
                 return
 
             available = (
@@ -1482,14 +1497,23 @@ class VoiceAssistantApp(App):
                 )
             )
 
+            print(
+                "811: SpeechRecognizer availability:",
+                bool(available)
+            )
+
             if not available:
 
-                print(
-                    "811: Android speech "
-                    "recognition unavailable"
+                self.speech_recognizer_ready = False
+
+                self.speech_init_error = (
+                    "No RecognitionService available"
                 )
 
-                self.speech_recognizer_ready = False
+                print(
+                    "811:",
+                    self.speech_init_error
+                )
 
                 return
 
@@ -1600,12 +1624,29 @@ class VoiceAssistantApp(App):
                 RecognitionListener()
             )
 
-            self.speech_recognizer = (
+            recognizer = (
                 SpeechRecognizer
                 .createSpeechRecognizer(
                     activity
                 )
             )
+
+            if recognizer is None:
+
+                self.speech_recognizer_ready = False
+
+                self.speech_init_error = (
+                    "createSpeechRecognizer returned null"
+                )
+
+                print(
+                    "811:",
+                    self.speech_init_error
+                )
+
+                return
+
+            self.speech_recognizer = recognizer
 
             self.speech_recognizer.setRecognitionListener(
                 self._speech_listener
@@ -1613,8 +1654,10 @@ class VoiceAssistantApp(App):
 
             self.speech_recognizer_ready = True
 
+            self.speech_init_error = ""
+
             print(
-                "811: Android SpeechRecognizer ready"
+                "811: SpeechRecognizer READY"
             )
 
         except Exception as exc:
@@ -1623,9 +1666,19 @@ class VoiceAssistantApp(App):
 
             self.speech_recognizer_ready = False
 
+            self.speech_init_error = (
+                type(exc).__name__
+                + ": "
+                + str(exc)
+            )
+
             print(
-                "811: SpeechRecognizer init error:",
-                repr(exc)
+                "811: SpeechRecognizer init FAILED:"
+            )
+
+            print(
+                "811:",
+                self.speech_init_error
             )
 
     # =====================================================
@@ -1645,22 +1698,39 @@ class VoiceAssistantApp(App):
 
             return
 
+        if self.processing:
+            return
+
+        if self.is_listening:
+            return
+
         if not self.speech_recognizer_ready:
+
+            message = (
+                "محرك التعرف على الكلام غير جاهز."
+            )
+
+            if self.speech_init_error:
+
+                message += (
+                    "\n\n"
+                    + self.speech_init_error
+                )
 
             self.set_state(
                 "error",
-                "محرك التعرف على الكلام غير جاهز."
+                message
             )
 
             return
 
-        if self.processing:
+        self._run_on_android_ui(
+            self._start_listening_on_ui
+        )
 
-            return
-
-        if self.is_listening:
-
-            return
+    def _start_listening_on_ui(
+        self
+    ):
 
         try:
 
@@ -1671,8 +1741,7 @@ class VoiceAssistantApp(App):
             )
 
             RecognizerIntent = autoclass(
-                "android.speech."
-                "RecognizerIntent"
+                "android.speech.RecognizerIntent"
             )
 
             intent = Intent(
@@ -1714,11 +1783,16 @@ class VoiceAssistantApp(App):
             self.is_listening = True
 
             self.set_state(
-                "listening"
+                "listening",
+                "جاري الاستماع..."
             )
 
             self.speech_recognizer.startListening(
                 intent
+            )
+
+            print(
+                "811: startListening OK"
             )
 
         except Exception as exc:
@@ -1726,13 +1800,16 @@ class VoiceAssistantApp(App):
             self.is_listening = False
 
             print(
-                "811: startListening error:",
+                "811: startListening FAILED:",
                 repr(exc)
             )
 
             self.set_state(
                 "error",
-                "تعذر بدء الاستماع."
+                "تعذر بدء الاستماع.\n"
+                + type(exc).__name__
+                + ": "
+                + str(exc)
             )
 
     # =====================================================
@@ -1748,6 +1825,14 @@ class VoiceAssistantApp(App):
             is None
         ):
             return
+
+        self._run_on_android_ui(
+            self._stop_listening_on_ui
+        )
+
+    def _stop_listening_on_ui(
+        self
+    ):
 
         try:
 
@@ -1769,7 +1854,7 @@ class VoiceAssistantApp(App):
             )
 
     # =====================================================
-    # EXTRACT SPEECH RESULTS
+    # SPEECH RESULTS
     # =====================================================
 
     def _extract_speech_results(
@@ -1810,14 +1895,14 @@ class VoiceAssistantApp(App):
         except Exception as exc:
 
             print(
-                "811: speech result extraction error:",
+                "811: speech result error:",
                 repr(exc)
             )
 
             return ""
 
     # =====================================================
-    # SPEECH EVENTS
+    # SPEECH CALLBACKS
     # =====================================================
 
     @mainthread
@@ -1825,13 +1910,12 @@ class VoiceAssistantApp(App):
         self
     ):
 
-        if self.processing:
-            return
+        if not self.processing:
 
-        self.set_state(
-            "listening",
-            "تحدث الآن..."
-        )
+            self.set_state(
+                "listening",
+                "تحدث الآن..."
+            )
 
     @mainthread
     def on_speech_begin(
@@ -1875,7 +1959,8 @@ class VoiceAssistantApp(App):
 
             self.output_label.text = (
                 fix_text(
-                    "أنت:\n" + text
+                    "أنت:\n"
+                    + text
                 )
             )
 
@@ -1915,11 +2000,6 @@ class VoiceAssistantApp(App):
             )
 
             return
-
-        print(
-            "811 USER SPEECH:",
-            repr(text)
-        )
 
         groq_key = (
             self.key_input
@@ -1974,7 +2054,7 @@ class VoiceAssistantApp(App):
             error_code
         )
 
-        error_messages = {
+        errors = {
 
             1:
                 "خطأ في الشبكة.",
@@ -2016,7 +2096,7 @@ class VoiceAssistantApp(App):
                 "ميزة التعرف غير متاحة."
         }
 
-        message = error_messages.get(
+        message = errors.get(
             int(error_code),
             "حدث خطأ في التعرف على الكلام."
         )
@@ -2037,7 +2117,7 @@ class VoiceAssistantApp(App):
         )
 
     # =====================================================
-    # MAIN BUTTON
+    # BUTTON
     # =====================================================
 
     def on_speak_click(
@@ -2048,8 +2128,6 @@ class VoiceAssistantApp(App):
         if self.processing:
             return
 
-        # الضغط مرة ثانية أثناء الاستماع
-        # = إيقاف الاستماع
         if self.is_listening:
 
             self.stop_listening()
@@ -2074,7 +2152,7 @@ class VoiceAssistantApp(App):
         self.start_listening()
 
     # =====================================================
-    # PROCESS USER TEXT
+    # AI PIPELINE
     # =====================================================
 
     def process_user_text(
@@ -2104,12 +2182,11 @@ class VoiceAssistantApp(App):
                 )
             )
 
-            if response is None:
-                response = ""
-
-            response = str(
-                response
-            ).strip()
+            response = (
+                ""
+                if response is None
+                else str(response).strip()
+            )
 
             if not response:
 
@@ -2133,10 +2210,6 @@ class VoiceAssistantApp(App):
             self.update_error(
                 "حدث خطأ أثناء معالجة طلبك."
             )
-
-    # =====================================================
-    # VOICE CONVERSATION RESULT
-    # =====================================================
 
     @mainthread
     def update_voice_conversation(
@@ -2162,9 +2235,6 @@ class VoiceAssistantApp(App):
             message
         )
 
-        # مهم:
-        # نطق النص الأصلي المنظف،
-        # وليس نص العرض المعكوس.
         self.speak(
             clean_for_speech(
                 response
@@ -2176,10 +2246,6 @@ class VoiceAssistantApp(App):
             self._return_to_ready(),
             2.5
         )
-
-    # =====================================================
-    # ERROR
-    # =====================================================
 
     @mainthread
     def update_error(
@@ -2203,7 +2269,7 @@ class VoiceAssistantApp(App):
         )
 
     # =====================================================
-    # RETURN READY
+    # READY
     # =====================================================
 
     def _return_to_ready(
@@ -2263,14 +2329,13 @@ class VoiceAssistantApp(App):
         self.key_input.focus = False
 
     # =====================================================
-    # APP STOP
+    # STOP
     # =====================================================
 
     def on_stop(
         self
     ):
 
-        # SpeechRecognizer
         try:
 
             if (
@@ -2278,9 +2343,49 @@ class VoiceAssistantApp(App):
                 is not None
             ):
 
+                self._run_on_android_ui(
+                    self._destroy_speech_on_ui
+                )
+
+        except Exception as exc:
+
+            print(
+                "811: SpeechRecognizer destroy error:",
+                repr(exc)
+            )
+
+        try:
+
+            if self.tts is not None:
+
+                self.tts.stop()
+
+                self.tts.shutdown()
+
+        except Exception as exc:
+
+            print(
+                "811: TTS shutdown error:",
+                repr(exc)
+            )
+
+        super().on_stop()
+
+    def _destroy_speech_on_ui(
+        self
+    ):
+
+        try:
+
+            if self.speech_recognizer is not None:
+
                 self.speech_recognizer.cancel()
 
                 self.speech_recognizer.destroy()
+
+                self.speech_recognizer = None
+
+                self.speech_recognizer_ready = False
 
                 print(
                     "811: SpeechRecognizer destroyed"
@@ -2293,33 +2398,10 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
 
-        # TTS
-        try:
-
-            if self.tts is not None:
-
-                self.tts.stop()
-
-                self.tts.shutdown()
-
-                print(
-                    "811: Native TTS shutdown complete"
-                )
-
-        except Exception as exc:
-
-            print(
-                "811: TTS shutdown error:",
-                repr(exc)
-            )
-
-        super().on_stop()
-
 
 # =========================================================
 # RUN
 # =========================================================
 
 if __name__ == "__main__":
-
     VoiceAssistantApp().run()
