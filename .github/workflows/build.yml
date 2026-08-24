@@ -68,22 +68,17 @@ jobs:
 
     - name: Verify project files
       run: |
-        echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-        echo "Checking ...extra_manifest.xml"
-        test -f "$GITHUB_WORKSPACE/src/android/extra_manifest.xml"
+        echo "Checking extra_manifest.xml..."
+        test -f "$GITHUB_WORKSPACE/extra_manifest.xml"
         echo "extra_manifest.xml FOUND"
-        echo "Checking ...buildozer.spec"
+        echo "Checking buildozer.spec..."
         test -f "$GITHUB_WORKSPACE/buildozer.spec"
         echo "buildozer.spec FOUND"
 
     - name: Build APK with Buildozer
       env:
         PIP_CONSTRAINT: /tmp/constraints.txt
-        APP_ANDROID_EXTRA_MANIFEST_XML: ${{ github.workspace }}/src/android/extra_manifest.xml
       run: |
-        echo "Using extra_manifest:"
-        echo "$APP_ANDROID_EXTRA_MANIFEST_XML"
-        test -f "$APP_ANDROID_EXTRA_MANIFEST_XML"
         buildozer -v android debug
 
     - name: Upload APK Artifact
