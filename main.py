@@ -26,7 +26,7 @@ from ai_client import AIClient
 # VERSION
 # =========================================================
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 
 # =========================================================
@@ -1398,7 +1398,10 @@ class VoiceAssistantApp(App):
         text
     ):
         try:
-            from jnius import autoclass
+            from jnius import (
+                autoclass,
+                cast
+            )
 
             TextToSpeech = autoclass(
                 "android.speech.tts.TextToSpeech"
@@ -1410,6 +1413,14 @@ class VoiceAssistantApp(App):
 
             AudioManager = autoclass(
                 "android.media.AudioManager"
+            )
+
+            JavaString = autoclass(
+                "java.lang.String"
+            )
+
+            HashMap = autoclass(
+                "java.util.HashMap"
             )
 
             if (
@@ -1425,24 +1436,6 @@ class VoiceAssistantApp(App):
                 self._init_native_tts_on_ui()
                 return
 
-            params = Bundle()
-
-            try:
-                params.putInt(
-                    TextToSpeech.Engine.KEY_PARAM_STREAM,
-                    AudioManager.STREAM_MUSIC
-                )
-
-                params.putFloat(
-                    TextToSpeech.Engine.KEY_PARAM_VOLUME,
-                    1.0
-                )
-            except Exception as params_exc:
-                print(
-                    "811: TTS params warning:",
-                    repr(params_exc)
-                )
-
             utterance_id = (
                 "811_utterance_"
                 + str(
@@ -1452,21 +1445,150 @@ class VoiceAssistantApp(App):
                 )
             )
 
-            result = self.tts.speak(
-                text,
-                TextToSpeech.QUEUE_FLUSH,
-                params,
-                utterance_id
+            queue_mode = int(
+                TextToSpeech.QUEUE_FLUSH
             )
+
+            # -------------------------------------------------
+            # Android API 21+ modern overload:
+            # speak(CharSequence, int, Bundle, String)
+            #
+            # Pyjnius does not always up-cast a Python string
+            # to java.lang.CharSequence automatically.  That
+            # was the exact runtime failure seen on the phone.
+            # Force the Java types explicitly.
+            # -------------------------------------------------
+
+            modern_error = None
+            result = None
+
+            try:
+                params = Bundle()
+
+                try:
+                    params.putInt(
+                        TextToSpeech.Engine.KEY_PARAM_STREAM,
+                        AudioManager.STREAM_MUSIC
+                    )
+
+                    params.putFloat(
+                        TextToSpeech.Engine.KEY_PARAM_VOLUME,
+                        1.0
+                    )
+                except Exception as params_exc:
+                    print(
+                        "811: TTS params warning:",
+                        repr(params_exc)
+                    )
+
+                java_text = cast(
+                    "java.lang.CharSequence",
+                    JavaString(text)
+                )
+
+                java_utterance_id = JavaString(
+                    utterance_id
+                )
+
+                result = self.tts.speak(
+                    java_text,
+                    queue_mode,
+                    params,
+                    java_utterance_id
+                )
+
+                print(
+                    "811: TTS modern speak overload used"
+                )
+
+            except Exception as exc:
+                modern_error = exc
+
+                print(
+                    "811: TTS modern speak overload failed:",
+                    repr(exc)
+                )
+
+            # -------------------------------------------------
+            # Defensive fallback:
+            # speak(String, int, HashMap)
+            #
+            # This overload is deprecated by Android but is
+            # still present and is very reliable through
+            # Pyjnius because every argument has an exact Java
+            # class rather than an interface type.
+            # -------------------------------------------------
+
+            if result is None:
+                legacy_params = HashMap()
+
+                try:
+                    legacy_params.put(
+                        TextToSpeech.Engine.KEY_PARAM_STREAM,
+                        JavaString(
+                            str(
+                                AudioManager.STREAM_MUSIC
+                            )
+                        )
+                    )
+
+                    legacy_params.put(
+                        TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID,
+                        JavaString(
+                            utterance_id
+                        )
+                    )
+                except Exception as legacy_params_exc:
+                    print(
+                        "811: TTS legacy params warning:",
+                        repr(legacy_params_exc)
+                    )
+
+                try:
+                    result = self.tts.speak(
+                        JavaString(text),
+                        queue_mode,
+                        legacy_params
+                    )
+
+                    print(
+                        "811: TTS legacy speak fallback used"
+                    )
+
+                except Exception as legacy_exc:
+                    self.tts_is_speaking = False
+                    self.tts_init_error = (
+                        "TTS-02: تعذر استدعاء محرك النطق على هذا الجهاز."
+                    )
+
+                    print(
+                        "811: TTS legacy speak fallback failed:",
+                        repr(legacy_exc)
+                    )
+
+                    if modern_error is not None:
+                        print(
+                            "811: TTS modern failure was:",
+                            repr(modern_error)
+                        )
+
+                    Clock.schedule_once(
+                        lambda dt:
+                        self._show_tts_error(),
+                        0
+                    )
+                    return
 
             self.tts_last_result = int(
                 result
             )
 
-            if result == TextToSpeech.ERROR:
+            if int(result) == int(
+                TextToSpeech.ERROR
+            ):
                 self.tts_is_speaking = False
                 self.tts_init_error = (
-                    "TextToSpeech.speak returned ERROR"
+                    "TTS-03: محرك Android رفض تشغيل الرد الصوتي."
                 )
 
                 print(
@@ -1482,6 +1604,7 @@ class VoiceAssistantApp(App):
 
             self._tts_pending_text = ""
             self.tts_is_speaking = True
+            self.tts_init_error = ""
 
             print(
                 "811: TTS speak queued successfully"
@@ -1495,9 +1618,7 @@ class VoiceAssistantApp(App):
         except Exception as exc:
             self.tts_is_speaking = False
             self.tts_init_error = (
-                type(exc).__name__
-                + ": "
-                + str(exc)
+                "TTS-01: تعذر تجهيز الرد الصوتي."
             )
 
             print(
@@ -1549,7 +1670,7 @@ class VoiceAssistantApp(App):
 
         details = (
             self.tts_init_error
-            or "Unknown TTS error"
+            or "TTS-00: تعذر تشغيل الرد الصوتي."
         )
 
         if (
