@@ -811,7 +811,11 @@ class VoiceAssistantApp(App):
     # UI SIZING
     # =====================================================
 
-    def _update_output_width( self, instance, width ):
+    def _update_output_width(
+        self,
+        instance,
+        width
+    ):
         instance.text_size = (
             max(
                 dp(80),
@@ -820,7 +824,11 @@ class VoiceAssistantApp(App):
             None
         )
 
-    def _update_output_height( self, instance, texture_size ):
+    def _update_output_height(
+        self,
+        instance,
+        texture_size
+    ):
         instance.height = max(
             dp(90),
             texture_size[1] + dp(20)
@@ -830,7 +838,11 @@ class VoiceAssistantApp(App):
     # STATES
     # =====================================================
 
-    def set_state( self, state, message=None ):
+    def set_state(
+        self,
+        state,
+        message=None
+    ):
         states = {
             "ready": {
                 "text": "جاهز",
@@ -975,7 +987,10 @@ class VoiceAssistantApp(App):
     # ANDROID MAIN THREAD HELPER
     # =====================================================
 
-    def _run_on_android_ui( self, func ):
+    def _run_on_android_ui(
+        self,
+        func
+    ):
         if platform != "android":
             func()
             return
@@ -1008,7 +1023,7 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-@java_method("()V")
+                @java_method("()V")
                 def run(self):
                     try:
                         func()
@@ -1037,7 +1052,9 @@ class VoiceAssistantApp(App):
     # NATIVE TTS
     # =====================================================
 
-    def init_native_tts( self ):
+    def init_native_tts(
+        self
+    ):
         if platform != "android":
             return
 
@@ -1075,8 +1092,11 @@ class VoiceAssistantApp(App):
                     "TextToSpeech$OnInitListener"
                 ]
 
-@java_method("(I)V")
-                def onInit( self, status ):
+                @java_method("(I)V")
+                def onInit(
+                    self,
+                    status
+                ):
                     try:
                         if (
                             status
@@ -1189,7 +1209,10 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
 
-    def speak( self, text ):
+    def speak(
+        self,
+        text
+    ):
         if platform != "android":
             print(
                 "811 [Desktop TTS]:",
@@ -1245,7 +1268,9 @@ class VoiceAssistantApp(App):
     # MICROPHONE PERMISSION
     # =====================================================
 
-    def _has_record_audio_permission( self ):
+    def _has_record_audio_permission(
+        self
+    ):
         if platform != "android":
             return False
 
@@ -1268,7 +1293,9 @@ class VoiceAssistantApp(App):
             )
             return False
 
-    def _request_record_audio_permission( self ):
+    def _request_record_audio_permission(
+        self
+    ):
         if platform != "android":
             return
 
@@ -1298,7 +1325,10 @@ class VoiceAssistantApp(App):
     # SPEECH ERROR MAP
     # =====================================================
 
-    def _speech_error_info( self, error_code ):
+    def _speech_error_info(
+        self,
+        error_code
+    ):
         errors = {
             1: (
                 "ERROR_NETWORK_TIMEOUT",
@@ -1370,7 +1400,9 @@ class VoiceAssistantApp(App):
             )
         )
 
-    def _current_speech_language( self ):
+    def _current_speech_language(
+        self
+    ):
         if (
             self.speech_language_index < 0
             or self.speech_language_index
@@ -1382,7 +1414,9 @@ class VoiceAssistantApp(App):
             self.speech_language_index
         ]
 
-    def _speech_language_label( self ):
+    def _speech_language_label(
+        self
+    ):
         language = (
             self._current_speech_language()
         )
@@ -1396,7 +1430,9 @@ class VoiceAssistantApp(App):
     # SPEECH RECOGNIZER INITIALIZATION
     # =====================================================
 
-    def init_native_speech( self ):
+    def init_native_speech(
+        self
+    ):
         if platform != "android":
             return
 
@@ -1404,7 +1440,9 @@ class VoiceAssistantApp(App):
             self._init_native_speech_on_ui
         )
 
-    def _init_native_speech_on_ui( self ):
+    def _init_native_speech_on_ui(
+        self
+    ):
         try:
             from jnius import (
                 autoclass,
@@ -1473,34 +1511,67 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-@java_method( "(Landroid/os/Bundle;)V" )
-                def onReadyForSpeech( self, params ):
+                @java_method(
+                    "(Landroid/os/Bundle;)V"
+                )
+                def onReadyForSpeech(
+                    self,
+                    params
+                ):
                     outer.on_speech_ready()
 
-@java_method( "()V" )
-                def onBeginningOfSpeech( self ):
+                @java_method(
+                    "()V"
+                )
+                def onBeginningOfSpeech(
+                    self
+                ):
                     outer.on_speech_begin()
 
-@java_method( "(F)V" )
-                def onRmsChanged( self, rmsdB ):
+                @java_method(
+                    "(F)V"
+                )
+                def onRmsChanged(
+                    self,
+                    rmsdB
+                ):
                     pass
 
-@java_method( "([B)V" )
-                def onBufferReceived( self, buffer ):
+                @java_method(
+                    "([B)V"
+                )
+                def onBufferReceived(
+                    self,
+                    buffer
+                ):
                     pass
 
-@java_method( "()V" )
-                def onEndOfSpeech( self ):
+                @java_method(
+                    "()V"
+                )
+                def onEndOfSpeech(
+                    self
+                ):
                     outer.on_speech_end()
 
-@java_method( "(I)V" )
-                def onError( self, error ):
+                @java_method(
+                    "(I)V"
+                )
+                def onError(
+                    self,
+                    error
+                ):
                     outer.on_speech_error(
                         int(error)
                     )
 
-@java_method( "(Landroid/os/Bundle;)V" )
-                def onResults( self, results ):
+                @java_method(
+                    "(Landroid/os/Bundle;)V"
+                )
+                def onResults(
+                    self,
+                    results
+                ):
                     # Important:
                     # Extract Java Bundle data inside the Java callback.
                     # Only a normal Python string crosses to Kivy's thread.
@@ -1515,8 +1586,13 @@ class VoiceAssistantApp(App):
                         text
                     )
 
-@java_method( "(Landroid/os/Bundle;)V" )
-                def onPartialResults( self, results ):
+                @java_method(
+                    "(Landroid/os/Bundle;)V"
+                )
+                def onPartialResults(
+                    self,
+                    results
+                ):
                     text = (
                         outer
                         ._extract_speech_results(
@@ -1528,8 +1604,14 @@ class VoiceAssistantApp(App):
                         text
                     )
 
-@java_method( "(ILandroid/os/Bundle;)V" )
-                def onEvent( self, event_type, params ):
+                @java_method(
+                    "(ILandroid/os/Bundle;)V"
+                )
+                def onEvent(
+                    self,
+                    event_type,
+                    params
+                ):
                     pass
 
             self._speech_listener = (
@@ -1591,7 +1673,9 @@ class VoiceAssistantApp(App):
     # START LISTENING
     # =====================================================
 
-    def start_listening( self ):
+    def start_listening(
+        self
+    ):
         if platform != "android":
             self.set_state(
                 "error",
@@ -1643,7 +1727,9 @@ class VoiceAssistantApp(App):
             self._start_listening_on_ui
         )
 
-    def _start_listening_on_ui( self ):
+    def _start_listening_on_ui(
+        self
+    ):
         try:
             from jnius import autoclass
 
@@ -1750,7 +1836,9 @@ class VoiceAssistantApp(App):
     # STOP LISTENING
     # =====================================================
 
-    def stop_listening( self ):
+    def stop_listening(
+        self
+    ):
         if self.speech_recognizer is None:
             return
 
@@ -1758,7 +1846,9 @@ class VoiceAssistantApp(App):
             self._stop_listening_on_ui
         )
 
-    def _stop_listening_on_ui( self ):
+    def _stop_listening_on_ui(
+        self
+    ):
         try:
             self.speech_recognizer.stopListening()
         except Exception as exc:
@@ -1782,7 +1872,10 @@ class VoiceAssistantApp(App):
     # SPEECH RESULTS
     # =====================================================
 
-    def _extract_speech_results( self, results ):
+    def _extract_speech_results(
+        self,
+        results
+    ):
         if results is None:
             return ""
 
@@ -1823,8 +1916,10 @@ class VoiceAssistantApp(App):
     # SPEECH CALLBACKS
     # =====================================================
 
-@mainthread
-    def on_speech_ready( self ):
+    @mainthread
+    def on_speech_ready(
+        self
+    ):
         if not self.processing:
             self.set_state(
                 "listening",
@@ -1833,23 +1928,30 @@ class VoiceAssistantApp(App):
                 + self._speech_language_label()
             )
 
-@mainthread
-    def on_speech_begin( self ):
+    @mainthread
+    def on_speech_begin(
+        self
+    ):
         self.set_state(
             "listening",
             "أستمع إليك..."
         )
 
-@mainthread
-    def on_speech_end( self ):
+    @mainthread
+    def on_speech_end(
+        self
+    ):
         if self.is_listening:
             self.set_state(
                 "thinking",
                 "جاري فهم كلامك..."
             )
 
-@mainthread
-    def on_speech_partial_text( self, text ):
+    @mainthread
+    def on_speech_partial_text(
+        self,
+        text
+    ):
         text = clean_unicode(
             text
         )
@@ -1860,8 +1962,11 @@ class VoiceAssistantApp(App):
                 + text
             )
 
-@mainthread
-    def on_speech_results_text( self, text ):
+    @mainthread
+    def on_speech_results_text(
+        self,
+        text
+    ):
         self.is_listening = False
         self.speech_recovery_attempts = 0
 
@@ -1921,8 +2026,11 @@ class VoiceAssistantApp(App):
             daemon=True
         ).start()
 
-@mainthread
-    def on_speech_error( self, error_code ):
+    @mainthread
+    def on_speech_error(
+        self,
+        error_code
+    ):
         self.is_listening = False
 
         error_code = int(
@@ -2089,7 +2197,9 @@ class VoiceAssistantApp(App):
     # SPEECH RECOVERY
     # =====================================================
 
-    def _recreate_speech_and_retry_on_ui( self ):
+    def _recreate_speech_and_retry_on_ui(
+        self
+    ):
         try:
             if self.speech_recognizer is not None:
                 try:
@@ -2156,7 +2266,10 @@ class VoiceAssistantApp(App):
     # BUTTON
     # =====================================================
 
-    def on_speak_click( self, instance ):
+    def on_speak_click(
+        self,
+        instance
+    ):
         if self.processing:
             return
 
@@ -2183,7 +2296,11 @@ class VoiceAssistantApp(App):
     # AI PIPELINE
     # =====================================================
 
-    def process_user_text( self, user_text, groq_key ):
+    def process_user_text(
+        self,
+        user_text,
+        groq_key
+    ):
         try:
             if self.ai_engine is None:
                 self.update_error(
@@ -2229,8 +2346,12 @@ class VoiceAssistantApp(App):
                 "حدث خطأ أثناء معالجة طلبك."
             )
 
-@mainthread
-    def update_voice_conversation( self, user_text, response ):
+    @mainthread
+    def update_voice_conversation(
+        self,
+        user_text,
+        response
+    ):
         self.processing = False
         self.speak_btn.disabled = False
 
@@ -2259,8 +2380,11 @@ class VoiceAssistantApp(App):
             2.5
         )
 
-@mainthread
-    def update_error( self, message ):
+    @mainthread
+    def update_error(
+        self,
+        message
+    ):
         self.processing = False
         self.speak_btn.disabled = False
 
@@ -2279,7 +2403,10 @@ class VoiceAssistantApp(App):
     # READY
     # =====================================================
 
-    def _return_to_ready( self, *args ):
+    def _return_to_ready(
+        self,
+        *args
+    ):
         if self.processing:
             return
 
@@ -2294,7 +2421,10 @@ class VoiceAssistantApp(App):
     # CLEAR
     # =====================================================
 
-    def on_clear_click( self, instance ):
+    def on_clear_click(
+        self,
+        instance
+    ):
         if self.processing:
             return
 
@@ -2326,7 +2456,9 @@ class VoiceAssistantApp(App):
     # STOP
     # =====================================================
 
-    def on_stop( self ):
+    def on_stop(
+        self
+    ):
         try:
             if self.speech_recognizer is not None:
                 self._run_on_android_ui(
@@ -2352,7 +2484,9 @@ class VoiceAssistantApp(App):
 
         super().on_stop()
 
-    def _destroy_speech_on_ui( self ):
+    def _destroy_speech_on_ui(
+        self
+    ):
         try:
             if self.speech_recognizer is not None:
                 try:
