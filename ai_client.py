@@ -1,136 +1,93 @@
 import os
 import re
-import json
+import datetime
 import requests
 
 
 class AIClient:
+    """Small, defensive Groq chat client used by Voice Assistant 811."""
 
     def __init__(self, groq_key=None, gemini_key=None):
-
         self.groq_key = (
-            groq_key or os.environ.get("GROQ_API_KEY", "")
+            groq_key
+            or os.environ.get("GROQ_API_KEY", "")
         ).strip()
 
+        # Kept for backward compatibility with the current app.
         self.gemini_key = (
-            gemini_key or os.environ.get("GEMINI_API_KEY", "")
+            gemini_key
+            or os.environ.get("GEMINI_API_KEY", "")
         ).strip()
 
-        # =====================================================
-        # Groq URLs
-        # =====================================================
-
-        self.groq_base_url = (
-            "https://api.groq.com/openai/v1"
-        )
-
+        self.groq_base_url = "https://api.groq.com/openai/v1"
         self.groq_chat_url = (
-            self.groq_base_url +
-            "/chat/completions"
+            self.groq_base_url
+            + "/chat/completions"
         )
-
         self.groq_models_url = (
-            self.groq_base_url +
-            "/models"
+            self.groq_base_url
+            + "/models"
         )
 
-        # =====================================================
-        # الموديلات الرسمية التي نفضلها
-        # =====================================================
-
+        # Quality first. Faster/smaller models remain as fallbacks.
         self.preferred_models = [
-
-            "llama-3.1-8b-instant",
-
             "llama-3.3-70b-versatile",
-
-            "openai/gpt-oss-20b",
-
             "openai/gpt-oss-120b",
-
+            "openai/gpt-oss-20b",
+            "llama-3.1-8b-instant",
         ]
 
-        # سيتم تحديده بعد فحص الموديلات
         self.groq_model = None
 
-        # =====================================================
-        # تعليمات المساعد
-        # =====================================================
+        today = datetime.date.today().isoformat()
 
         self.system_instruction = (
-            "أنت مساعد صوتي ذكي واسمك 811. "
-            "تحدث باللغة العربية بطلاقة. "
-            "كن مختصرًا ومباشرًا وواضحًا. "
-            "لا تستخدم Markdown أو رموزًا غير ضرورية."
+            "أنت 811، مساعد شخصي ذكي للمستخدم. "
+            "أجب بالعربية السليمة والواضحة والطبيعية، "
+            "وافهم اللهجة العراقية عندما يستخدمها المستخدم. "
+            "الأولوية للدقة ثم الوضوح ثم الاختصار. "
+            "لا تخترع أرقاماً أو حقائق أو مصادر. "
+            "إذا لم تكن متأكداً من معلومة متغيرة زمنياً فقل ذلك بوضوح. "
+            "لا تدّعي أن لديك وصولاً مباشراً للويب أو بيانات حية "
+            "ما لم تُزوَّد بها فعلاً. "
+            "تجنب Markdown والرموز الزائدة لأن الرد سيُعرض ويُنطق صوتياً. "
+            "استخدم جُملاً عربية طبيعية وسهلة النطق. "
+            "تاريخ الجهاز الحالي: "
+            + today
+            + "."
         )
-
-        # =====================================================
-        # سجل المحادثة
-        # =====================================================
 
         self.history = [
             {
                 "role": "system",
-                "content": self.system_instruction
+                "content": self.system_instruction,
             }
         ]
 
     # =========================================================
-    # الدالة الرئيسية
+    # PUBLIC API
     # =========================================================
 
     def get_response(self, user_text):
+        user_text = self._clean_text(
+            user_text
+        )
+
+        if not user_text:
+            return "لم أسمع أو أستلم نصاً واضحاً."
+
+        if not self.groq_key:
+            return "مفتاح Groq API غير موجود."
 
         try:
-
-            print("")
-            print("====================================")
-            print("811 AI CLIENT START")
-            print("====================================")
-
-            if not user_text or not user_text.strip():
-
-                return (
-                    "ERROR: لم يتم إدخال نص."
-                )
-
-            user_text = user_text.strip()
-
-            # -------------------------------------------------
-            # فحص المفتاح
-            # -------------------------------------------------
-
-            if not self.groq_key:
-
-                return (
-                    "GROQ ERROR\n\n"
-                    "مفتاح Groq API فارغ."
-                )
-
-            print(
-                "GROQ KEY:",
-                self._mask_key(self.groq_key)
-            )
-
-            # -------------------------------------------------
-            # اكتشاف موديل متاح
-            # -------------------------------------------------
-
-            print(
-                "GROQ MODEL:",
-                self.groq_model
-            )
-
             if not self.groq_model:
-
                 model_result = (
                     self._detect_available_model()
                 )
 
                 if not model_result["success"]:
-
                     return (
-                        "GROQ MODEL DISCOVERY ERROR\n\n"
+                        "تعذر اختيار نموذج Groq.\n"
                         + model_result["error"]
                     )
 
@@ -138,40 +95,27 @@ class AIClient:
                     model_result["model"]
                 )
 
-            print(
-                "SELECTED GROQ MODEL:",
-                self.groq_model
-            )
-
-            # -------------------------------------------------
-            # إرسال الطلب
-            # -------------------------------------------------
-
             result = self._call_groq(
                 user_text
             )
 
             if result["success"]:
-
                 return result["text"]
 
-            # -------------------------------------------------
-            # إذا كان الموديل غير موجود
-            # نحاول اكتشاف موديل آخر مرة واحدة
-            # -------------------------------------------------
+            error_text = (
+                result["error"]
+                or ""
+            )
 
-            error_text = result["error"]
+            # A model can disappear from the account/provider list.
+            # Rediscover once instead of permanently failing.
+            low = error_text.lower()
 
             if (
-                "model_not_found" in error_text.lower()
-                or "does not exist" in error_text.lower()
-                or "404" in error_text
+                "model_not_found" in low
+                or "does not exist" in low
+                or "404" in low
             ):
-
-                print(
-                    "MODEL FAILED - TRYING DISCOVERY AGAIN"
-                )
-
                 self.groq_model = None
 
                 model_result = (
@@ -179,906 +123,505 @@ class AIClient:
                 )
 
                 if model_result["success"]:
-
                     self.groq_model = (
                         model_result["model"]
                     )
 
-                    print(
-                        "NEW MODEL:",
-                        self.groq_model
+                    retry_result = (
+                        self._call_groq(
+                            user_text
+                        )
                     )
 
-                    result = self._call_groq(
-                        user_text
-                    )
-
-                    if result["success"]:
-
-                        return result["text"]
+                    if retry_result["success"]:
+                        return retry_result["text"]
 
                     error_text = (
-                        result["error"]
+                        retry_result["error"]
                     )
 
             return (
-                "GROQ ERROR\n\n"
+                "حدث خطأ أثناء الاتصال بـ Groq.\n"
                 + error_text
-            )
+            ).strip()
 
-        except Exception as e:
-
+        except Exception as exc:
             print(
-                "========== AI CLIENT FATAL ERROR =========="
-            )
-
-            print(
-                "TYPE:",
-                type(e).__name__
-            )
-
-            print(
-                "EXCEPTION:",
-                repr(e)
+                "811: AI client fatal error:",
+                type(exc).__name__,
+                repr(exc)
             )
 
             return (
-                "AI CLIENT ERROR\n\n"
-                f"Type: {type(e).__name__}\n"
-                f"Exception: {repr(e)}"
+                "تعذر إكمال الطلب حالياً. "
+                "حاول مرة أخرى بعد قليل."
             )
 
+    def clear_history(self):
+        self.history = [
+            {
+                "role": "system",
+                "content": self.system_instruction,
+            }
+        ]
+
     # =========================================================
-    # اكتشاف الموديل المتاح
+    # MODEL DISCOVERY
     # =========================================================
 
     def _detect_available_model(self):
-
         try:
-
-            headers = {
-                "Authorization":
-                    f"Bearer {self.groq_key}",
-
-                "Content-Type":
-                    "application/json",
-
-                "Accept":
-                    "application/json"
-            }
-
-            print("")
-            print(
-                "===================================="
-            )
-            print(
-                "GROQ MODEL DISCOVERY"
-            )
-            print(
-                "===================================="
-            )
-
             response = requests.get(
                 self.groq_models_url,
-                headers=headers,
-                timeout=20
+                headers=self._headers(),
+                timeout=20,
             )
-
-            print(
-                "MODELS STATUS:",
-                response.status_code
-            )
-
-            print(
-                "MODELS RAW:"
-            )
-
-            print(
-                response.text[:8000]
-            )
-
-            # -------------------------------------------------
-            # HTTP error
-            # -------------------------------------------------
 
             if response.status_code != 200:
-
                 return {
                     "success": False,
                     "model": None,
-                    "error":
-                        self._format_http_error(
-                            response
-                        )
+                    "error": self._format_http_error(
+                        response
+                    ),
                 }
 
-            # -------------------------------------------------
-            # JSON
-            # -------------------------------------------------
-
-            try:
-
-                data = response.json()
-
-            except Exception as e:
-
-                return {
-                    "success": False,
-                    "model": None,
-                    "error": (
-                        "فشل تحليل قائمة موديلات Groq.\n"
-                        f"Type: {type(e).__name__}\n"
-                        f"Exception: {repr(e)}\n\n"
-                        f"Raw:\n"
-                        f"{response.text[:5000]}"
-                    )
-                }
-
-            # -------------------------------------------------
-            # استخراج الموديلات
-            # -------------------------------------------------
-
-            models = data.get(
-                "data",
-                []
-            )
+            data = response.json()
 
             available_models = []
 
-            for item in models:
-
-                if not isinstance(
-                    item,
-                    dict
-                ):
+            for item in data.get("data", []):
+                if not isinstance(item, dict):
                     continue
 
-                model_id = item.get(
-                    "id"
-                )
+                model_id = item.get("id")
 
                 if model_id:
-
                     available_models.append(
                         str(model_id)
                     )
 
-            print(
-                "AVAILABLE MODELS:"
-            )
-
-            for model in available_models:
-
-                print(
-                    " -",
-                    model
-                )
-
-            # -------------------------------------------------
-            # لا توجد موديلات
-            # -------------------------------------------------
-
             if not available_models:
-
                 return {
                     "success": False,
                     "model": None,
                     "error": (
-                        "Groq أعاد قائمة موديلات فارغة."
-                    )
+                        "Groq أعاد قائمة نماذج فارغة."
+                    ),
                 }
 
-            # =================================================
-            # اختيار الموديل المفضل
-            # =================================================
-
-            for preferred in (
-                self.preferred_models
-            ):
-
-                if preferred in (
-                    available_models
-                ):
-
+            for preferred in self.preferred_models:
+                if preferred in available_models:
                     print(
-                        "PREFERRED MODEL FOUND:",
+                        "811: selected Groq model:",
                         preferred
                     )
 
                     return {
                         "success": True,
                         "model": preferred,
-                        "error": ""
+                        "error": "",
                     }
 
-            # =================================================
-            # اختيار موديل نصي تلقائي
-            # =================================================
-
-            blocked_words = [
-
+            blocked_words = (
                 "whisper",
                 "tts",
                 "speech",
                 "guard",
                 "embed",
-                "moderation"
-
-            ]
+                "moderation",
+                "audio",
+            )
 
             candidates = []
 
-            for model_id in (
-                available_models
-            ):
-
+            for model_id in available_models:
                 low = model_id.lower()
 
-                blocked = False
+                if any(
+                    word in low
+                    for word in blocked_words
+                ):
+                    continue
 
-                for word in blocked_words:
-
-                    if word in low:
-
-                        blocked = True
-
-                        break
-
-                if not blocked:
-
-                    candidates.append(
-                        model_id
-                    )
-
-            if candidates:
-
-                selected = candidates[0]
-
-                print(
-                    "AUTO SELECTED MODEL:",
-                    selected
+                candidates.append(
+                    model_id
                 )
 
+            if not candidates:
                 return {
-                    "success": True,
-                    "model": selected,
-                    "error": ""
+                    "success": False,
+                    "model": None,
+                    "error": (
+                        "لم يتم العثور على نموذج محادثة مناسب."
+                    ),
                 }
 
-            # =================================================
-            # فشل الاختيار
-            # =================================================
+            # Prefer larger general-purpose models when the provider
+            # exposes a model that is not in our explicit list.
+            def quality_score(model_id):
+                low = model_id.lower()
+                score = 0
 
+                if "120b" in low:
+                    score += 120
+                elif "70b" in low:
+                    score += 70
+                elif "32b" in low:
+                    score += 32
+                elif "20b" in low:
+                    score += 20
+                elif "8b" in low:
+                    score += 8
+
+                if "versatile" in low:
+                    score += 20
+
+                if "instant" in low:
+                    score -= 10
+
+                return score
+
+            candidates.sort(
+                key=quality_score,
+                reverse=True
+            )
+
+            selected = candidates[0]
+
+            print(
+                "811: auto-selected Groq model:",
+                selected
+            )
+
+            return {
+                "success": True,
+                "model": selected,
+                "error": "",
+            }
+
+        except requests.exceptions.Timeout:
             return {
                 "success": False,
                 "model": None,
                 "error": (
-                    "تم العثور على موديلات Groq "
-                    "لكن لم نجد موديل محادثة مناسبًا.\n\n"
-                    "Available models:\n"
-                    +
-                    "\n".join(
-                        available_models[:100]
-                    )
-                )
+                    "انتهت مهلة الاتصال بخدمة Groq."
+                ),
             }
 
-        # =====================================================
-        # Timeout
-        # =====================================================
+        except requests.exceptions.ConnectionError:
+            return {
+                "success": False,
+                "model": None,
+                "error": (
+                    "تعذر الاتصال بخدمة Groq. "
+                    "تحقق من الإنترنت."
+                ),
+            }
 
-        except requests.exceptions.Timeout as e:
-
+        except Exception as exc:
             print(
-                "MODEL DISCOVERY TIMEOUT:",
-                repr(e)
+                "811: model discovery error:",
+                type(exc).__name__,
+                repr(exc)
             )
 
             return {
                 "success": False,
                 "model": None,
                 "error": (
-                    "انتهت مهلة الاتصال بـ Groq.\n"
-                    f"Type: {type(e).__name__}\n"
-                    f"Exception: {repr(e)}"
-                )
-            }
-
-        # =====================================================
-        # Connection
-        # =====================================================
-
-        except requests.exceptions.ConnectionError as e:
-
-            print(
-                "MODEL DISCOVERY CONNECTION ERROR:",
-                repr(e)
-            )
-
-            return {
-                "success": False,
-                "model": None,
-                "error": (
-                    "تعذر الاتصال بخادم Groq.\n"
-                    f"Type: {type(e).__name__}\n"
-                    f"Exception: {repr(e)}"
-                )
-            }
-
-        # =====================================================
-        # General
-        # =====================================================
-
-        except Exception as e:
-
-            print(
-                "MODEL DISCOVERY UNKNOWN ERROR:",
-                repr(e)
-            )
-
-            return {
-                "success": False,
-                "model": None,
-                "error": (
-                    "خطأ غير متوقع أثناء اكتشاف الموديل.\n"
-                    f"Type: {type(e).__name__}\n"
-                    f"Exception: {repr(e)}"
-                )
+                    "حدث خطأ غير متوقع أثناء اختيار النموذج."
+                ),
             }
 
     # =========================================================
-    # إرسال Chat Completion
+    # CHAT COMPLETION
     # =========================================================
 
-    def _call_groq(self, user_text):
+    def _call_groq(
+        self,
+        user_text
+    ):
+        messages = list(
+            self.history
+        )
+
+        messages.append(
+            {
+                "role": "user",
+                "content": user_text,
+            }
+        )
+
+        # Keep enough context for a useful conversation without
+        # letting mobile requests grow indefinitely.
+        if len(messages) > 13:
+            messages = (
+                [messages[0]]
+                + messages[-12:]
+            )
+
+        payload = {
+            "model": self.groq_model,
+            "messages": messages,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": 700,
+            "stream": False,
+        }
 
         try:
-
-            # -------------------------------------------------
-            # نسخ التاريخ
-            # -------------------------------------------------
-
-            messages = list(
-                self.history
-            )
-
-            messages.append(
-                {
-                    "role": "user",
-                    "content": user_text
-                }
-            )
-
-            # -------------------------------------------------
-            # منع تضخم المحادثة
-            # -------------------------------------------------
-
-            if len(messages) > 7:
-
-                messages = (
-                    [messages[0]]
-                    +
-                    messages[-6:]
-                )
-
-            # -------------------------------------------------
-            # البيانات
-            # -------------------------------------------------
-
-            payload = {
-
-                "model":
-                    self.groq_model,
-
-                "messages":
-                    messages,
-
-                "temperature":
-                    0.3,
-
-                "max_tokens":
-                    512,
-
-                "stream":
-                    False
-            }
-
-            headers = {
-
-                "Authorization":
-                    f"Bearer {self.groq_key}",
-
-                "Content-Type":
-                    "application/json",
-
-                "Accept":
-                    "application/json"
-            }
-
-            print("")
-            print(
-                "===================================="
-            )
-            print(
-                "GROQ CHAT REQUEST"
-            )
-            print(
-                "===================================="
-            )
-
-            print(
-                "MODEL:",
-                self.groq_model
-            )
-
-            print(
-                "URL:",
-                self.groq_chat_url
-            )
-
-            print(
-                "PROMPT:",
-                user_text
-            )
-
-            # -------------------------------------------------
-            # الطلب
-            # -------------------------------------------------
-
             response = requests.post(
-
                 self.groq_chat_url,
-
+                headers=self._headers(),
                 json=payload,
-
-                headers=headers,
-
-                timeout=30
+                timeout=35,
             )
-
-            # -------------------------------------------------
-            # طباعة الحالة
-            # -------------------------------------------------
-
-            print(
-                "CHAT STATUS:",
-                response.status_code
-            )
-
-            print(
-                "CHAT RAW:"
-            )
-
-            print(
-                response.text[:8000]
-            )
-
-            # -------------------------------------------------
-            # HTTP error
-            # -------------------------------------------------
 
             if response.status_code != 200:
-
                 return {
-
-                    "success":
-                        False,
-
-                    "text":
-                        "",
-
-                    "error":
-                        self._format_http_error(
-                            response
-                        )
+                    "success": False,
+                    "text": "",
+                    "error": self._format_http_error(
+                        response
+                    ),
                 }
 
-            # -------------------------------------------------
-            # JSON
-            # -------------------------------------------------
+            data = response.json()
+            choices = data.get(
+                "choices",
+                []
+            )
 
-            try:
-
-                data = response.json()
-
-            except Exception as e:
-
+            if not choices:
                 return {
-
-                    "success":
-                        False,
-
-                    "text":
-                        "",
-
+                    "success": False,
+                    "text": "",
                     "error": (
-                        "فشل تحليل استجابة Groq.\n"
-                        f"Type: {type(e).__name__}\n"
-                        f"Exception: {repr(e)}\n\n"
-                        f"Raw:\n"
-                        f"{response.text[:5000]}"
-                    )
+                        "Groq لم يُرجع إجابة."
+                    ),
                 }
 
-            # -------------------------------------------------
-            # استخراج الإجابة
-            # -------------------------------------------------
+            message = (
+                choices[0]
+                .get("message", {})
+            )
 
-            try:
-
-                choices = data.get(
-                    "choices",
-                    []
-                )
-
-                if not choices:
-
-                    raise ValueError(
-                        "choices فارغة"
-                    )
-
-                message = choices[0].get(
-                    "message",
-                    {}
-                )
-
-                answer = message.get(
+            answer = self._clean_text(
+                message.get(
                     "content",
                     ""
                 )
-
-            except Exception as e:
-
-                return {
-
-                    "success":
-                        False,
-
-                    "text":
-                        "",
-
-                    "error": (
-                        "بنية استجابة Groq غير متوقعة.\n"
-                        f"Type: {type(e).__name__}\n"
-                        f"Exception: {repr(e)}\n\n"
-                        "JSON:\n"
-                        +
-                        json.dumps(
-                            data,
-                            ensure_ascii=False
-                        )[:5000]
-                    )
-                }
-
-            # -------------------------------------------------
-            # تنظيف
-            # -------------------------------------------------
-
-            answer = self._clean_text(
-                answer
             )
 
             if not answer:
-
                 return {
-
-                    "success":
-                        False,
-
-                    "text":
-                        "",
-
-                    "error":
-                        "Groq أعاد ردًا فارغًا."
+                    "success": False,
+                    "text": "",
+                    "error": (
+                        "وصل رد فارغ من Groq."
+                    ),
                 }
 
-            # -------------------------------------------------
-            # إضافة للمحادثة
-            # -------------------------------------------------
-
             self.history.append(
-
                 {
-                    "role":
-                        "user",
-
-                    "content":
-                        user_text
+                    "role": "user",
+                    "content": user_text,
                 }
             )
 
             self.history.append(
-
                 {
-                    "role":
-                        "assistant",
-
-                    "content":
-                        answer
+                    "role": "assistant",
+                    "content": answer,
                 }
             )
 
-            print(
-                "GROQ ANSWER:",
-                answer
-            )
+            # Hard cap the saved history as well.
+            if len(self.history) > 13:
+                self.history = (
+                    [self.history[0]]
+                    + self.history[-12:]
+                )
 
             return {
-
-                "success":
-                    True,
-
-                "text":
-                    answer,
-
-                "error":
-                    ""
+                "success": True,
+                "text": answer,
+                "error": "",
             }
 
-        # =====================================================
-        # Timeout
-        # =====================================================
-
-        except requests.exceptions.Timeout as e:
-
-            print(
-                "GROQ TIMEOUT:",
-                repr(e)
-            )
-
+        except requests.exceptions.Timeout:
             return {
-
-                "success":
-                    False,
-
-                "text":
-                    "",
-
+                "success": False,
+                "text": "",
                 "error": (
-                    "REQUEST TIMEOUT\n"
-                    f"Type: {type(e).__name__}\n"
-                    f"Exception: {repr(e)}"
-                )
+                    "انتهت مهلة انتظار رد Groq."
+                ),
             }
 
-        # =====================================================
-        # SSL
-        # =====================================================
-
-        except requests.exceptions.SSLError as e:
-
-            print(
-                "GROQ SSL ERROR:",
-                repr(e)
-            )
-
+        except requests.exceptions.ConnectionError:
             return {
-
-                "success":
-                    False,
-
-                "text":
-                    "",
-
+                "success": False,
+                "text": "",
                 "error": (
-                    "SSL/TLS ERROR\n"
-                    f"Type: {type(e).__name__}\n"
-                    f"Exception: {repr(e)}"
-                )
+                    "انقطع الاتصال بخدمة Groq."
+                ),
             }
 
-        # =====================================================
-        # Connection
-        # =====================================================
-
-        except requests.exceptions.ConnectionError as e:
-
-            print(
-                "GROQ CONNECTION ERROR:",
-                repr(e)
-            )
-
+        except ValueError:
             return {
-
-                "success":
-                    False,
-
-                "text":
-                    "",
-
+                "success": False,
+                "text": "",
                 "error": (
-                    "CONNECTION ERROR\n"
-                    f"Type: {type(e).__name__}\n"
-                    f"Exception: {repr(e)}"
-                )
+                    "تعذر قراءة استجابة Groq."
+                ),
             }
 
-        # =====================================================
-        # General
-        # =====================================================
-
-        except Exception as e:
-
+        except Exception as exc:
             print(
-                "GROQ UNKNOWN ERROR:",
-                repr(e)
+                "811: Groq request error:",
+                type(exc).__name__,
+                repr(exc)
             )
 
             return {
-
-                "success":
-                    False,
-
-                "text":
-                    "",
-
+                "success": False,
+                "text": "",
                 "error": (
-                    "UNKNOWN ERROR\n"
-                    f"Type: {type(e).__name__}\n"
-                    f"Exception: {repr(e)}"
-                )
+                    "حدث خطأ غير متوقع أثناء طلب Groq."
+                ),
             }
 
     # =========================================================
-    # تنسيق خطأ HTTP
+    # HELPERS
     # =========================================================
 
-    def _format_http_error(self, response):
+    def _headers(self):
+        return {
+            "Authorization": (
+                "Bearer "
+                + self.groq_key
+            ),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def _format_http_error(
+        self,
+        response
+    ):
+        status = getattr(
+            response,
+            "status_code",
+            "?"
+        )
+
+        detail = ""
 
         try:
-
             data = response.json()
 
-            print(
-                "HTTP ERROR JSON:",
-                json.dumps(
-                    data,
-                    ensure_ascii=False
-                )[:5000]
-            )
-
-            if isinstance(
-                data,
-                dict
-            ):
-
+            if isinstance(data, dict):
                 error = data.get(
-                    "error"
+                    "error",
+                    data
                 )
 
-                if isinstance(
-                    error,
-                    dict
-                ):
-
-                    message = error.get(
-                        "message",
-                        "Unknown error"
+                if isinstance(error, dict):
+                    detail = str(
+                        error.get(
+                            "message",
+                            ""
+                        )
                     )
+                else:
+                    detail = str(error)
 
-                    error_type = error.get(
-                        "type",
-                        ""
-                    )
-
-                    code = error.get(
-                        "code",
-                        ""
-                    )
-
-                    return (
-                        f"HTTP {response.status_code}\n"
-                        f"Message: {message}\n"
-                        f"Type: {error_type}\n"
-                        f"Code: {code}"
-                    )
-
-                return (
-                    f"HTTP {response.status_code}\n"
-                    +
-                    json.dumps(
-                        data,
-                        ensure_ascii=False
-                    )[:4000]
+        except Exception:
+            detail = str(
+                getattr(
+                    response,
+                    "text",
+                    ""
                 )
-
-        except Exception as e:
-
-            print(
-                "HTTP ERROR PARSE ERROR:",
-                repr(e)
             )
 
+        detail = self._clean_text(
+            detail
+        )
+
+        if len(detail) > 700:
+            detail = (
+                detail[:700]
+                + "..."
+            )
+
+        if detail:
             return (
-                f"HTTP {response.status_code}\n"
-                f"Type: {type(e).__name__}\n"
-                f"Exception: {repr(e)}\n"
-                f"Raw: {response.text[:5000]}"
+                "HTTP "
+                + str(status)
+                + ": "
+                + detail
             )
 
         return (
-            f"HTTP {response.status_code}\n"
-            f"Raw: {response.text[:5000]}"
+            "HTTP "
+            + str(status)
         )
 
-    # =========================================================
-    # إخفاء جزء من مفتاح API في Logcat
-    # =========================================================
-
-    def _mask_key(self, key):
-
-        if not key:
-
-            return "(empty)"
+    def _mask_key(
+        self,
+        key
+    ):
+        key = str(
+            key or ""
+        )
 
         if len(key) <= 8:
-
             return "********"
 
         return (
             key[:4]
-            +
-            "********"
-            +
-            key[-4:]
+            + "..."
+            + key[-4:]
         )
 
-    # =========================================================
-    # تنظيف الإجابة
-    # =========================================================
-
-    def _clean_text(self, text):
-
-        if not text:
-
+    def _clean_text(
+        self,
+        text
+    ):
+        if text is None:
             return ""
 
         text = str(text)
 
-        # إزالة Markdown البسيط
-
+        # Remove control characters that cause display/TTS issues while
+        # preserving normal newlines.
         text = re.sub(
-            r"[*#_~`]",
+            r"[\u0000-\u0008\u000b\u000c\u000e-\u001f]",
             "",
             text
         )
 
-        text = re.sub(
-            r"(?m)^\s*[-•]\s*",
-            "",
-            text
+        text = text.replace(
+            "\r\n",
+            "\n"
+        ).replace(
+            "\r",
+            "\n"
         )
 
-        text = re.sub(
-            r"[ \t]+",
-            " ",
-            text
-        )
+        lines = []
 
-        text = re.sub(
-            r"\n{3,}",
-            "\n\n",
-            text
-        )
+        for line in text.split("\n"):
+            line = re.sub(
+                r"[ \t]+",
+                " ",
+                line
+            ).strip()
 
-        return text.strip()
+            lines.append(line)
 
-    # =========================================================
-    # مسح سجل المحادثة
-    # =========================================================
-
-    def clear_history(self):
-
-        self.history = [
-
-            {
-                "role":
-                    "system",
-
-                "content":
-                    self.system_instruction
-            }
-
-        ]
-
-        self.groq_model = None
+        return "\n".join(
+            lines
+        ).strip()

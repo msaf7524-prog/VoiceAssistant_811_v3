@@ -26,7 +26,7 @@ from ai_client import AIClient
 # VERSION
 # =========================================================
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 
 # =========================================================
@@ -110,20 +110,39 @@ def clean_unicode(text):
 
 
 def fix_text(text):
+    """Prepare text for Kivy while preserving Arabic line order."""
     clean_text = clean_unicode(text)
 
     if not clean_text:
         return ""
 
-    if not re.search(r"[\u0600-\u06FF]", clean_text):
-        return clean_text
+    display_lines = []
 
-    try:
-        reshaped = arabic_reshaper.reshape(clean_text)
-        return get_display(reshaped, base_dir="R")
-    except Exception as exc:
-        print("811: Arabic formatting error:", repr(exc))
-        return clean_text
+    for line in clean_text.split("\n"):
+        if not line:
+            display_lines.append("")
+            continue
+
+        if not re.search(r"[\u0600-\u06FF]", line):
+            display_lines.append(line)
+            continue
+
+        try:
+            reshaped = arabic_reshaper.reshape(line)
+            display_lines.append(
+                get_display(
+                    reshaped,
+                    base_dir="R"
+                )
+            )
+        except Exception as exc:
+            print(
+                "811: Arabic formatting error:",
+                repr(exc)
+            )
+            display_lines.append(line)
+
+    return "\n".join(display_lines)
 
 
 def clean_for_speech(text):
@@ -341,6 +360,12 @@ class VoiceAssistantApp(App):
         self.tts = None
         self.tts_ready = False
         self.tts_language_ready = False
+        self.tts_init_error = ""
+        self.tts_last_result = None
+        self.tts_media_volume = None
+        self.tts_media_volume_max = None
+        self.tts_is_speaking = False
+        self._tts_pending_text = ""
         self._tts_listener = None
 
         # -------------------------
@@ -640,7 +665,7 @@ class VoiceAssistantApp(App):
                 1.0
             ),
             size_hint_y=None,
-            halign="center",
+            halign="right",
             valign="top",
             padding=(
                 dp(12),
@@ -660,6 +685,9 @@ class VoiceAssistantApp(App):
         self.scroll.add_widget(
             self.output_label
         )
+
+        # Start Arabic conversations from the top of the panel.
+        self.scroll.scroll_y = 1
 
         chat_panel.add_widget(
             self.scroll
@@ -918,7 +946,7 @@ class VoiceAssistantApp(App):
                 setattr(
                     self.scroll,
                     "scroll_y",
-                    0
+                    1
                 ),
                 0
             )
@@ -1058,6 +1086,13 @@ class VoiceAssistantApp(App):
         if platform != "android":
             return
 
+        self._run_on_android_ui(
+            self._init_native_tts_on_ui
+        )
+
+    def _init_native_tts_on_ui(
+        self
+    ):
         try:
             from jnius import (
                 autoclass,
@@ -1077,10 +1112,44 @@ class VoiceAssistantApp(App):
                 "java.util.Locale"
             )
 
+            Context = autoclass(
+                "android.content.Context"
+            )
+
+            AudioManager = autoclass(
+                "android.media.AudioManager"
+            )
+
             activity = PythonActivity.mActivity
 
             if activity is None:
+                self.tts_ready = False
+                self.tts_language_ready = False
+                self.tts_init_error = (
+                    "Android Activity unavailable"
+                )
+                print(
+                    "811: TTS init failed:",
+                    self.tts_init_error
+                )
                 return
+
+            if self.tts is not None:
+                try:
+                    self.tts.stop()
+                except Exception:
+                    pass
+
+                try:
+                    self.tts.shutdown()
+                except Exception:
+                    pass
+
+                self.tts = None
+
+            self.tts_ready = False
+            self.tts_language_ready = False
+            self.tts_init_error = ""
 
             outer = self
 
@@ -1091,6 +1160,7 @@ class VoiceAssistantApp(App):
                     "android/speech/tts/"
                     "TextToSpeech$OnInitListener"
                 ]
+                __javacontext__ = "app"
 
                 @java_method("(I)V")
                 def onInit(
@@ -1103,6 +1173,12 @@ class VoiceAssistantApp(App):
                             != TextToSpeech.SUCCESS
                         ):
                             outer.tts_ready = False
+                            outer.tts_language_ready = False
+                            outer.tts_init_error = (
+                                "TextToSpeech initialization failed "
+                                "with status "
+                                + str(status)
+                            )
 
                             print(
                                 "811: TTS initialization failed:",
@@ -1112,6 +1188,7 @@ class VoiceAssistantApp(App):
 
                         outer.tts_ready = True
                         outer.tts_language_ready = False
+                        outer.tts_init_error = ""
 
                         locales = [
                             Locale(
@@ -1121,6 +1198,14 @@ class VoiceAssistantApp(App):
                             Locale(
                                 "ar",
                                 "SA"
+                            ),
+                            Locale(
+                                "ar",
+                                "AE"
+                            ),
+                            Locale(
+                                "ar",
+                                "EG"
                             ),
                             Locale(
                                 "ar"
@@ -1138,48 +1223,115 @@ class VoiceAssistantApp(App):
 
                                 if (
                                     available
+                                    < TextToSpeech.LANG_AVAILABLE
+                                ):
+                                    continue
+
+                                result = (
+                                    outer.tts
+                                    .setLanguage(
+                                        locale
+                                    )
+                                )
+
+                                if (
+                                    result
                                     >= TextToSpeech.LANG_AVAILABLE
                                 ):
-                                    result = (
-                                        outer.tts
-                                        .setLanguage(
-                                            locale
-                                        )
+                                    outer.tts_language_ready = True
+
+                                    print(
+                                        "811: Arabic TTS ready:",
+                                        locale
                                     )
-
-                                    if (
-                                        result
-                                        >= TextToSpeech.LANG_AVAILABLE
-                                    ):
-                                        outer.tts_language_ready = True
-
-                                        print(
-                                            "811: Arabic TTS ready:",
-                                            locale
-                                        )
-                                        break
+                                    break
 
                             except Exception as lang_exc:
                                 print(
                                     "811: TTS locale error:",
-                                    repr(
-                                        lang_exc
-                                    )
+                                    repr(lang_exc)
                                 )
+
+                        if not outer.tts_language_ready:
+                            outer.tts_init_error = (
+                                "No Arabic TTS voice is installed "
+                                "or enabled on this device."
+                            )
+
+                            print(
+                                "811:",
+                                outer.tts_init_error
+                            )
+                            return
 
                         try:
                             outer.tts.setSpeechRate(
-                                0.92
+                                0.95
                             )
 
                             outer.tts.setPitch(
                                 1.0
                             )
-                        except Exception:
-                            pass
+                        except Exception as voice_exc:
+                            print(
+                                "811: TTS voice tuning error:",
+                                repr(voice_exc)
+                            )
+
+                        try:
+                            audio_manager = (
+                                activity.getSystemService(
+                                    Context.AUDIO_SERVICE
+                                )
+                            )
+
+                            outer.tts_media_volume = (
+                                audio_manager
+                                .getStreamVolume(
+                                    AudioManager.STREAM_MUSIC
+                                )
+                            )
+
+                            outer.tts_media_volume_max = (
+                                audio_manager
+                                .getStreamMaxVolume(
+                                    AudioManager.STREAM_MUSIC
+                                )
+                            )
+
+                            print(
+                                "811: Media volume:",
+                                outer.tts_media_volume,
+                                "/",
+                                outer.tts_media_volume_max
+                            )
+
+                        except Exception as volume_exc:
+                            print(
+                                "811: Media volume check error:",
+                                repr(volume_exc)
+                            )
+
+                        pending = outer._tts_pending_text
+
+                        if pending:
+                            outer._tts_pending_text = ""
+
+                            outer._run_on_android_ui(
+                                lambda:
+                                outer._speak_on_android_ui(
+                                    pending
+                                )
+                            )
 
                     except Exception as exc:
                         outer.tts_ready = False
+                        outer.tts_language_ready = False
+                        outer.tts_init_error = (
+                            type(exc).__name__
+                            + ": "
+                            + str(exc)
+                        )
 
                         print(
                             "811: TTS callback error:",
@@ -1203,6 +1355,11 @@ class VoiceAssistantApp(App):
             self.tts = None
             self.tts_ready = False
             self.tts_language_ready = False
+            self.tts_init_error = (
+                type(exc).__name__
+                + ": "
+                + str(exc)
+            )
 
             print(
                 "811: Native TTS init error:",
@@ -1220,12 +1377,6 @@ class VoiceAssistantApp(App):
             )
             return
 
-        if not self.tts_ready:
-            return
-
-        if not self.tts_language_ready:
-            return
-
         text = clean_for_speech(
             text
         )
@@ -1233,6 +1384,19 @@ class VoiceAssistantApp(App):
         if not text:
             return
 
+        self._tts_pending_text = text
+
+        self._run_on_android_ui(
+            lambda:
+            self._speak_on_android_ui(
+                text
+            )
+        )
+
+    def _speak_on_android_ui(
+        self,
+        text
+    ):
         try:
             from jnius import autoclass
 
@@ -1240,29 +1404,188 @@ class VoiceAssistantApp(App):
                 "android.speech.tts.TextToSpeech"
             )
 
-            Build = autoclass(
-                "android.os.Build"
+            Bundle = autoclass(
+                "android.os.Bundle"
             )
 
-            if Build.VERSION.SDK_INT >= 21:
-                self.tts.speak(
-                    text,
-                    TextToSpeech.QUEUE_FLUSH,
-                    None,
-                    "811_utterance"
-                )
-            else:
-                self.tts.speak(
-                    text,
-                    TextToSpeech.QUEUE_FLUSH,
-                    None
+            AudioManager = autoclass(
+                "android.media.AudioManager"
+            )
+
+            if (
+                self.tts is None
+                or not self.tts_ready
+                or not self.tts_language_ready
+            ):
+                print(
+                    "811: TTS not ready; reinitializing."
                 )
 
+                self._tts_pending_text = text
+                self._init_native_tts_on_ui()
+                return
+
+            params = Bundle()
+
+            try:
+                params.putInt(
+                    TextToSpeech.Engine.KEY_PARAM_STREAM,
+                    AudioManager.STREAM_MUSIC
+                )
+
+                params.putFloat(
+                    TextToSpeech.Engine.KEY_PARAM_VOLUME,
+                    1.0
+                )
+            except Exception as params_exc:
+                print(
+                    "811: TTS params warning:",
+                    repr(params_exc)
+                )
+
+            utterance_id = (
+                "811_utterance_"
+                + str(
+                    abs(
+                        hash(text)
+                    )
+                )
+            )
+
+            result = self.tts.speak(
+                text,
+                TextToSpeech.QUEUE_FLUSH,
+                params,
+                utterance_id
+            )
+
+            self.tts_last_result = int(
+                result
+            )
+
+            if result == TextToSpeech.ERROR:
+                self.tts_is_speaking = False
+                self.tts_init_error = (
+                    "TextToSpeech.speak returned ERROR"
+                )
+
+                print(
+                    "811: TTS speak returned ERROR"
+                )
+
+                Clock.schedule_once(
+                    lambda dt:
+                    self._show_tts_error(),
+                    0
+                )
+                return
+
+            self._tts_pending_text = ""
+            self.tts_is_speaking = True
+
+            print(
+                "811: TTS speak queued successfully"
+            )
+
+            Clock.schedule_once(
+                self._watch_tts_completion,
+                0.35
+            )
+
         except Exception as exc:
+            self.tts_is_speaking = False
+            self.tts_init_error = (
+                type(exc).__name__
+                + ": "
+                + str(exc)
+            )
+
             print(
                 "811: TTS speak error:",
                 repr(exc)
             )
+
+            Clock.schedule_once(
+                lambda dt:
+                self._show_tts_error(),
+                0
+            )
+
+    def _watch_tts_completion(
+        self,
+        dt
+    ):
+        if platform != "android":
+            self.tts_is_speaking = False
+            return
+
+        try:
+            if (
+                self.tts is not None
+                and self.tts.isSpeaking()
+            ):
+                self.tts_is_speaking = True
+
+                Clock.schedule_once(
+                    self._watch_tts_completion,
+                    0.30
+                )
+                return
+
+        except Exception as exc:
+            print(
+                "811: TTS isSpeaking check error:",
+                repr(exc)
+            )
+
+        self.tts_is_speaking = False
+        self._return_to_ready()
+
+    def _show_tts_error(
+        self
+    ):
+        self.processing = False
+        self.speak_btn.disabled = False
+
+        details = (
+            self.tts_init_error
+            or "Unknown TTS error"
+        )
+
+        if (
+            self.tts_media_volume is not None
+            and self.tts_media_volume <= 0
+        ):
+            details += (
+                "\n"
+                "مستوى صوت الوسائط في الهاتف يساوي صفر."
+            )
+
+        self.status_label.text = fix_text(
+            "تعذر تشغيل الرد الصوتي"
+        )
+
+        self.status_label.color = (
+            1.0,
+            0.28,
+            0.30,
+            1.0
+        )
+
+        self.status_orb.set_state(
+            "error"
+        )
+
+        self.output_label.text = (
+            self.output_label.text
+            + "\n\n"
+            + fix_text(
+                "تشخيص الصوت:\n"
+                + details
+            )
+        )
+
+        self.scroll.scroll_y = 1
 
     # =====================================================
     # MICROPHONE PERMISSION
@@ -2374,11 +2697,7 @@ class VoiceAssistantApp(App):
             )
         )
 
-        Clock.schedule_once(
-            lambda dt:
-            self._return_to_ready(),
-            2.5
-        )
+        # The TTS watcher returns the UI to ready when playback ends.
 
     @mainthread
     def update_error(
