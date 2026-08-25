@@ -26,21 +26,15 @@ from ai_client import AIClient
 # VERSION
 # =========================================================
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 
 # =========================================================
 # PATHS
 # =========================================================
 
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
-
-FONT_PATH = os.path.join(
-    BASE_DIR,
-    "Cairo-Regular.ttf"
-)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_PATH = os.path.join(BASE_DIR, "Cairo-Regular.ttf")
 
 
 # =========================================================
@@ -51,28 +45,13 @@ ARABIC_FONT = "Roboto"
 
 if os.path.exists(FONT_PATH):
     try:
-        LabelBase.register(
-            name="Cairo",
-            fn_regular=FONT_PATH
-        )
-
+        LabelBase.register(name="Cairo", fn_regular=FONT_PATH)
         ARABIC_FONT = "Cairo"
-
-        print(
-            "811: Cairo-Regular.ttf loaded successfully"
-        )
-
+        print("811: Cairo-Regular.ttf loaded successfully")
     except Exception as exc:
-        print(
-            "811: Cairo font registration error:",
-            repr(exc)
-        )
-
+        print("811: Cairo font registration error:", repr(exc))
 else:
-    print(
-        "811: Cairo-Regular.ttf NOT FOUND:",
-        FONT_PATH
-    )
+    print("811: Cairo-Regular.ttf NOT FOUND:", FONT_PATH)
 
 
 # =========================================================
@@ -106,19 +85,12 @@ def clean_unicode(text):
     text = str(text)
 
     for char in HIDDEN_UNICODE:
-        text = text.replace(
-            char,
-            ""
-        )
+        text = text.replace(char, "")
 
     cleaned = []
 
     for char in text:
-
-        if char in (
-            "\n",
-            "\t"
-        ):
+        if char in ("\n", "\t"):
             cleaned.append(char)
             continue
 
@@ -130,14 +102,8 @@ def clean_unicode(text):
     text = "".join(cleaned)
 
     lines = []
-
     for line in text.splitlines():
-        line = re.sub(
-            r"[ \t]+",
-            " ",
-            line
-        ).strip()
-
+        line = re.sub(r"[ \t]+", " ", line).strip()
         lines.append(line)
 
     return "\n".join(lines).strip()
@@ -149,32 +115,14 @@ def fix_text(text):
     if not clean_text:
         return ""
 
-    if not re.search(
-        r"[\u0600-\u06FF]",
-        clean_text
-    ):
+    if not re.search(r"[\u0600-\u06FF]", clean_text):
         return clean_text
 
     try:
-
-        reshaped = (
-            arabic_reshaper.reshape(
-                clean_text
-            )
-        )
-
-        return get_display(
-            reshaped,
-            base_dir="R"
-        )
-
+        reshaped = arabic_reshaper.reshape(clean_text)
+        return get_display(reshaped, base_dir="R")
     except Exception as exc:
-
-        print(
-            "811: Arabic formatting error:",
-            repr(exc)
-        )
-
+        print("811: Arabic formatting error:", repr(exc))
         return clean_text
 
 
@@ -184,17 +132,8 @@ def clean_for_speech(text):
     if not text:
         return ""
 
-    text = re.sub(
-        r"[*_~`#]",
-        "",
-        text
-    )
-
-    text = re.sub(
-        r"[ \t]+",
-        " ",
-        text
-    )
+    text = re.sub(r"[*_~`#]", "", text)
+    text = re.sub(r"[ \t]+", " ", text)
 
     return text.strip()
 
@@ -204,16 +143,11 @@ def clean_for_speech(text):
 # =========================================================
 
 def request_android_permissions():
-
     if platform != "android":
         return
 
     try:
-
-        from android.permissions import (
-            request_permissions,
-            Permission
-        )
+        from android.permissions import request_permissions, Permission
 
         permissions = [
             Permission.RECORD_AUDIO,
@@ -222,52 +156,23 @@ def request_android_permissions():
             Permission.MODIFY_AUDIO_SETTINGS,
         ]
 
-        if hasattr(
-            Permission,
-            "BLUETOOTH_CONNECT"
-        ):
-            permissions.append(
-                Permission.BLUETOOTH_CONNECT
-            )
+        if hasattr(Permission, "BLUETOOTH_CONNECT"):
+            permissions.append(Permission.BLUETOOTH_CONNECT)
 
-        if hasattr(
-            Permission,
-            "BLUETOOTH_SCAN"
-        ):
-            permissions.append(
-                Permission.BLUETOOTH_SCAN
-            )
+        if hasattr(Permission, "BLUETOOTH_SCAN"):
+            permissions.append(Permission.BLUETOOTH_SCAN)
 
-        if hasattr(
-            Permission,
-            "BLUETOOTH"
-        ):
-            permissions.append(
-                Permission.BLUETOOTH
-            )
+        if hasattr(Permission, "BLUETOOTH"):
+            permissions.append(Permission.BLUETOOTH)
 
-        if hasattr(
-            Permission,
-            "BLUETOOTH_ADMIN"
-        ):
-            permissions.append(
-                Permission.BLUETOOTH_ADMIN
-            )
+        if hasattr(Permission, "BLUETOOTH_ADMIN"):
+            permissions.append(Permission.BLUETOOTH_ADMIN)
 
-        request_permissions(
-            permissions
-        )
-
-        print(
-            "811: Android permissions requested"
-        )
+        request_permissions(permissions)
+        print("811: Android permissions requested")
 
     except Exception as exc:
-
-        print(
-            "811: Permission error:",
-            repr(exc)
-        )
+        print("811: Permission error:", repr(exc))
 
 
 # =========================================================
@@ -292,37 +197,31 @@ class StatusOrb(Widget):
         )
 
     def set_state(self, state):
-
         colors = {
-
             "ready": (
                 0.13,
                 0.59,
                 0.95,
                 1.0
             ),
-
             "listening": (
                 0.00,
                 0.78,
                 0.88,
                 1.0
             ),
-
             "thinking": (
                 1.00,
                 0.60,
                 0.08,
                 1.0
             ),
-
             "speaking": (
                 0.20,
                 0.80,
                 0.30,
                 1.0
             ),
-
             "error": (
                 0.92,
                 0.20,
@@ -339,26 +238,19 @@ class StatusOrb(Widget):
         self._redraw()
 
     def _redraw(self, *args):
-
         self.canvas.clear()
 
-        if self.width <= 0:
-            return
-
-        if self.height <= 0:
+        if self.width <= 0 or self.height <= 0:
             return
 
         with self.canvas:
-
             cx = self.center_x
             cy = self.center_y
 
-            radius = (
-                min(
-                    self.width,
-                    self.height
-                ) * 0.22
-            )
+            radius = min(
+                self.width,
+                self.height
+            ) * 0.22
 
             Color(
                 self.status_color[0],
@@ -396,9 +288,7 @@ class StatusOrb(Widget):
                 )
             )
 
-            Color(
-                *self.status_color
-            )
+            Color(*self.status_color)
 
             Ellipse(
                 pos=(
@@ -435,17 +325,13 @@ class StatusOrb(Widget):
 class VoiceAssistantApp(App):
 
     def build(self):
-
-        self.title = (
-            "VOICE ASSISTANT 811"
-        )
+        self.title = "VOICE ASSISTANT 811"
 
         # -------------------------
         # Core state
         # -------------------------
 
         self.processing = False
-
         self.ai_engine = None
 
         # -------------------------
@@ -467,8 +353,26 @@ class VoiceAssistantApp(App):
 
         self._speech_listener = None
         self._speech_autoclass = None
+        self._last_ui_runnable = None
 
         self.speech_init_error = ""
+        self.speech_last_error_code = 0
+        self.speech_last_error_name = ""
+
+        # Prefer Iraqi Arabic, then Saudi Arabic, then generic Arabic,
+        # and finally allow Android to use its own default language.
+        self.speech_languages = [
+            "ar-IQ",
+            "ar-SA",
+            "ar",
+            None
+        ]
+        self.speech_language_index = 0
+
+        # One automatic recovery is allowed for transient recognizer
+        # states such as ERROR_CLIENT / ERROR_RECOGNIZER_BUSY.
+        self.speech_recovery_attempts = 0
+        self.speech_max_recovery_attempts = 1
 
         # -------------------------
         # UI
@@ -483,16 +387,12 @@ class VoiceAssistantApp(App):
         # =================================================
 
         try:
-
             self.ai_engine = AIClient()
-
         except Exception as exc:
-
             print(
                 "811: AIClient init error:",
                 repr(exc)
             )
-
             self.ai_engine = None
 
         # =================================================
@@ -504,7 +404,6 @@ class VoiceAssistantApp(App):
         )
 
         with root.canvas.before:
-
             Color(
                 0.025,
                 0.030,
@@ -512,12 +411,10 @@ class VoiceAssistantApp(App):
                 1.0
             )
 
-            root.background_rect = (
-                RoundedRectangle(
-                    pos=root.pos,
-                    size=root.size,
-                    radius=[0]
-                )
+            root.background_rect = RoundedRectangle(
+                pos=root.pos,
+                size=root.size,
+                radius=[0]
             )
 
         root.bind(
@@ -565,9 +462,7 @@ class VoiceAssistantApp(App):
         )
 
         self.title_label = Label(
-            text=(
-                "VOICE ASSISTANT 811"
-            ),
+            text="VOICE ASSISTANT 811",
             font_name=self.arabic_font,
             font_size="23sp",
             bold=True,
@@ -896,17 +791,18 @@ class VoiceAssistantApp(App):
         )
 
         if platform == "android":
-
             Clock.schedule_once(
                 lambda dt:
                 self.init_native_tts(),
                 1.0
             )
 
+            # Give the permission dialog a little more time before
+            # creating SpeechRecognizer.
             Clock.schedule_once(
                 lambda dt:
                 self.init_native_speech(),
-                1.5
+                2.0
             )
 
         return root
@@ -915,12 +811,7 @@ class VoiceAssistantApp(App):
     # UI SIZING
     # =====================================================
 
-    def _update_output_width(
-        self,
-        instance,
-        width
-    ):
-
+    def _update_output_width( self, instance, width ):
         instance.text_size = (
             max(
                 dp(80),
@@ -929,12 +820,7 @@ class VoiceAssistantApp(App):
             None
         )
 
-    def _update_output_height(
-        self,
-        instance,
-        texture_size
-    ):
-
+    def _update_output_height( self, instance, texture_size ):
         instance.height = max(
             dp(90),
             texture_size[1] + dp(20)
@@ -944,14 +830,8 @@ class VoiceAssistantApp(App):
     # STATES
     # =====================================================
 
-    def set_state(
-        self,
-        state,
-        message=None
-    ):
-
+    def set_state( self, state, message=None ):
         states = {
-
             "ready": {
                 "text": "جاهز",
                 "color": (
@@ -961,7 +841,6 @@ class VoiceAssistantApp(App):
                     1.0
                 )
             },
-
             "listening": {
                 "text": "جاري الاستماع...",
                 "color": (
@@ -971,7 +850,6 @@ class VoiceAssistantApp(App):
                     1.0
                 )
             },
-
             "thinking": {
                 "text": "جاري التفكير...",
                 "color": (
@@ -981,7 +859,6 @@ class VoiceAssistantApp(App):
                     1.0
                 )
             },
-
             "speaking": {
                 "text": "811 يتحدث الآن",
                 "color": (
@@ -991,7 +868,6 @@ class VoiceAssistantApp(App):
                     1.0
                 )
             },
-
             "error": {
                 "text": "حدث خطأ",
                 "color": (
@@ -1021,11 +897,8 @@ class VoiceAssistantApp(App):
         )
 
         if message is not None:
-
-            self.output_label.text = (
-                fix_text(
-                    message
-                )
+            self.output_label.text = fix_text(
+                message
             )
 
             Clock.schedule_once(
@@ -1039,7 +912,6 @@ class VoiceAssistantApp(App):
             )
 
         if state == "listening":
-
             self.speak_btn.text = fix_text(
                 "إيقاف الاستماع"
             )
@@ -1052,7 +924,6 @@ class VoiceAssistantApp(App):
             )
 
         elif state == "thinking":
-
             self.speak_btn.text = fix_text(
                 "جاري التفكير..."
             )
@@ -1065,7 +936,6 @@ class VoiceAssistantApp(App):
             )
 
         elif state == "speaking":
-
             self.speak_btn.text = fix_text(
                 "يتحدث 811..."
             )
@@ -1078,7 +948,6 @@ class VoiceAssistantApp(App):
             )
 
         elif state == "error":
-
             self.speak_btn.text = fix_text(
                 "حاول مرة أخرى"
             )
@@ -1091,7 +960,6 @@ class VoiceAssistantApp(App):
             )
 
         else:
-
             self.speak_btn.text = fix_text(
                 "اضغط للتحدث"
             )
@@ -1107,17 +975,12 @@ class VoiceAssistantApp(App):
     # ANDROID MAIN THREAD HELPER
     # =====================================================
 
-    def _run_on_android_ui(
-        self,
-        func
-    ):
-
+    def _run_on_android_ui( self, func ):
         if platform != "android":
             func()
             return
 
         try:
-
             from jnius import (
                 PythonJavaClass,
                 java_method,
@@ -1128,34 +991,28 @@ class VoiceAssistantApp(App):
                 "org.kivy.android.PythonActivity"
             )
 
-            activity = (
-                PythonActivity.mActivity
-            )
+            activity = PythonActivity.mActivity
 
             if activity is None:
-
-                func()
-
+                print(
+                    "811: Android Activity unavailable "
+                    "for runOnUiThread"
+                )
                 return
-
-            outer = self
 
             class UiRunnable(
                 PythonJavaClass
             ):
-
                 __javainterfaces__ = [
                     "java/lang/Runnable"
                 ]
+                __javacontext__ = "app"
 
-                @java_method("()V")
+@java_method("()V")
                 def run(self):
-
                     try:
                         func()
-
                     except Exception as exc:
-
                         print(
                             "811: Android UI Runnable error:",
                             repr(exc)
@@ -1163,6 +1020,7 @@ class VoiceAssistantApp(App):
 
             runnable = UiRunnable()
 
+            # Keep a strong reference while Java may still use it.
             self._last_ui_runnable = runnable
 
             activity.runOnUiThread(
@@ -1170,27 +1028,20 @@ class VoiceAssistantApp(App):
             )
 
         except Exception as exc:
-
             print(
                 "811: runOnUiThread error:",
                 repr(exc)
             )
 
-            func()
-
     # =====================================================
     # NATIVE TTS
     # =====================================================
 
-    def init_native_tts(
-        self
-    ):
-
+    def init_native_tts( self ):
         if platform != "android":
             return
 
         try:
-
             from jnius import (
                 autoclass,
                 PythonJavaClass,
@@ -1209,9 +1060,7 @@ class VoiceAssistantApp(App):
                 "java.util.Locale"
             )
 
-            activity = (
-                PythonActivity.mActivity
-            )
+            activity = PythonActivity.mActivity
 
             if activity is None:
                 return
@@ -1221,36 +1070,27 @@ class VoiceAssistantApp(App):
             class TTSInitListener(
                 PythonJavaClass
             ):
-
                 __javainterfaces__ = [
                     "android/speech/tts/"
                     "TextToSpeech$OnInitListener"
                 ]
 
-                @java_method("(I)V")
-                def onInit(
-                    self,
-                    status
-                ):
-
+@java_method("(I)V")
+                def onInit( self, status ):
                     try:
-
                         if (
                             status
                             != TextToSpeech.SUCCESS
                         ):
-
                             outer.tts_ready = False
 
                             print(
                                 "811: TTS initialization failed:",
                                 status
                             )
-
                             return
 
                         outer.tts_ready = True
-
                         outer.tts_language_ready = False
 
                         locales = [
@@ -1268,9 +1108,7 @@ class VoiceAssistantApp(App):
                         ]
 
                         for locale in locales:
-
                             try:
-
                                 available = (
                                     outer.tts
                                     .isLanguageAvailable(
@@ -1280,11 +1118,8 @@ class VoiceAssistantApp(App):
 
                                 if (
                                     available
-                                    >=
-                                    TextToSpeech
-                                    .LANG_AVAILABLE
+                                    >= TextToSpeech.LANG_AVAILABLE
                                 ):
-
                                     result = (
                                         outer.tts
                                         .setLanguage(
@@ -1294,22 +1129,17 @@ class VoiceAssistantApp(App):
 
                                     if (
                                         result
-                                        >=
-                                        TextToSpeech
-                                        .LANG_AVAILABLE
+                                        >= TextToSpeech.LANG_AVAILABLE
                                     ):
-
                                         outer.tts_language_ready = True
 
                                         print(
                                             "811: Arabic TTS ready:",
                                             locale
                                         )
-
                                         break
 
                             except Exception as lang_exc:
-
                                 print(
                                     "811: TTS locale error:",
                                     repr(
@@ -1318,7 +1148,6 @@ class VoiceAssistantApp(App):
                                 )
 
                         try:
-
                             outer.tts.setSpeechRate(
                                 0.92
                             )
@@ -1326,12 +1155,10 @@ class VoiceAssistantApp(App):
                             outer.tts.setPitch(
                                 1.0
                             )
-
                         except Exception:
                             pass
 
                     except Exception as exc:
-
                         outer.tts_ready = False
 
                         print(
@@ -1353,11 +1180,8 @@ class VoiceAssistantApp(App):
             )
 
         except Exception as exc:
-
             self.tts = None
-
             self.tts_ready = False
-
             self.tts_language_ready = False
 
             print(
@@ -1365,18 +1189,12 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
 
-    def speak(
-        self,
-        text
-    ):
-
+    def speak( self, text ):
         if platform != "android":
-
             print(
                 "811 [Desktop TTS]:",
                 text
             )
-
             return
 
         if not self.tts_ready:
@@ -1393,7 +1211,6 @@ class VoiceAssistantApp(App):
             return
 
         try:
-
             from jnius import autoclass
 
             TextToSpeech = autoclass(
@@ -1404,20 +1221,14 @@ class VoiceAssistantApp(App):
                 "android.os.Build"
             )
 
-            if (
-                Build.VERSION.SDK_INT
-                >= 21
-            ):
-
+            if Build.VERSION.SDK_INT >= 21:
                 self.tts.speak(
                     text,
                     TextToSpeech.QUEUE_FLUSH,
                     None,
                     "811_utterance"
                 )
-
             else:
-
                 self.tts.speak(
                     text,
                     TextToSpeech.QUEUE_FLUSH,
@@ -1425,34 +1236,176 @@ class VoiceAssistantApp(App):
                 )
 
         except Exception as exc:
-
             print(
                 "811: TTS speak error:",
                 repr(exc)
             )
 
     # =====================================================
-    # SPEECH RECOGNIZER INITIALIZATION
+    # MICROPHONE PERMISSION
     # =====================================================
 
-    def init_native_speech(
-        self
-    ):
+    def _has_record_audio_permission( self ):
+        if platform != "android":
+            return False
 
+        try:
+            from android.permissions import (
+                check_permission,
+                Permission
+            )
+
+            return bool(
+                check_permission(
+                    Permission.RECORD_AUDIO
+                )
+            )
+
+        except Exception as exc:
+            print(
+                "811: RECORD_AUDIO permission check error:",
+                repr(exc)
+            )
+            return False
+
+    def _request_record_audio_permission( self ):
         if platform != "android":
             return
 
-        # Everything below is forced to Android UI thread.
+        try:
+            from android.permissions import (
+                request_permissions,
+                Permission
+            )
+
+            request_permissions(
+                [
+                    Permission.RECORD_AUDIO
+                ]
+            )
+
+            print(
+                "811: RECORD_AUDIO permission requested"
+            )
+
+        except Exception as exc:
+            print(
+                "811: RECORD_AUDIO permission request error:",
+                repr(exc)
+            )
+
+    # =====================================================
+    # SPEECH ERROR MAP
+    # =====================================================
+
+    def _speech_error_info( self, error_code ):
+        errors = {
+            1: (
+                "ERROR_NETWORK_TIMEOUT",
+                "انتهت مهلة اتصال خدمة التعرف على الكلام."
+            ),
+            2: (
+                "ERROR_NETWORK",
+                "حدث خطأ في شبكة خدمة التعرف على الكلام."
+            ),
+            3: (
+                "ERROR_AUDIO",
+                "حدث خطأ أثناء تسجيل الصوت من الميكروفون."
+            ),
+            4: (
+                "ERROR_SERVER",
+                "خادم التعرف على الكلام أعاد خطأ."
+            ),
+            5: (
+                "ERROR_CLIENT",
+                "أوقف Android جلسة التعرف من جهة التطبيق."
+            ),
+            6: (
+                "ERROR_SPEECH_TIMEOUT",
+                "لم يتم اكتشاف كلام خلال المهلة المحددة."
+            ),
+            7: (
+                "ERROR_NO_MATCH",
+                "تم سماع صوت لكن لم يتم التعرف على كلمات مطابقة."
+            ),
+            8: (
+                "ERROR_RECOGNIZER_BUSY",
+                "محرك التعرف على الكلام مشغول حالياً."
+            ),
+            9: (
+                "ERROR_INSUFFICIENT_PERMISSIONS",
+                "صلاحية الميكروفون غير متاحة للتطبيق."
+            ),
+            10: (
+                "ERROR_TOO_MANY_REQUESTS",
+                "تم إرسال طلبات كثيرة إلى محرك التعرف."
+            ),
+            11: (
+                "ERROR_SERVER_DISCONNECTED",
+                "انقطع الاتصال بخدمة التعرف على الكلام."
+            ),
+            12: (
+                "ERROR_LANGUAGE_NOT_SUPPORTED",
+                "لغة التعرف المطلوبة غير مدعومة على هذا الجهاز."
+            ),
+            13: (
+                "ERROR_LANGUAGE_UNAVAILABLE",
+                "لغة التعرف المطلوبة مدعومة لكنها غير متاحة حالياً."
+            ),
+            14: (
+                "ERROR_CANNOT_CHECK_SUPPORT",
+                "تعذر التحقق من دعم محرك التعرف."
+            ),
+            15: (
+                "ERROR_CANNOT_LISTEN_TO_DOWNLOAD_EVENTS",
+                "تعذر الاستماع إلى أحداث تنزيل نموذج اللغة."
+            )
+        }
+
+        return errors.get(
+            int(error_code),
+            (
+                "ERROR_UNKNOWN",
+                "حدث خطأ غير معروف في التعرف على الكلام."
+            )
+        )
+
+    def _current_speech_language( self ):
+        if (
+            self.speech_language_index < 0
+            or self.speech_language_index
+            >= len(self.speech_languages)
+        ):
+            self.speech_language_index = 0
+
+        return self.speech_languages[
+            self.speech_language_index
+        ]
+
+    def _speech_language_label( self ):
+        language = (
+            self._current_speech_language()
+        )
+
+        if language is None:
+            return "SYSTEM_DEFAULT"
+
+        return language
+
+    # =====================================================
+    # SPEECH RECOGNIZER INITIALIZATION
+    # =====================================================
+
+    def init_native_speech( self ):
+        if platform != "android":
+            return
+
         self._run_on_android_ui(
             self._init_native_speech_on_ui
         )
 
-    def _init_native_speech_on_ui(
-        self
-    ):
-
+    def _init_native_speech_on_ui( self ):
         try:
-
             from jnius import (
                 autoclass,
                 PythonJavaClass,
@@ -1471,14 +1424,10 @@ class VoiceAssistantApp(App):
                 "android.speech.SpeechRecognizer"
             )
 
-            activity = (
-                PythonActivity.mActivity
-            )
+            activity = PythonActivity.mActivity
 
             if activity is None:
-
                 self.speech_recognizer_ready = False
-
                 self.speech_init_error = (
                     "Android Activity unavailable"
                 )
@@ -1487,7 +1436,6 @@ class VoiceAssistantApp(App):
                     "811:",
                     self.speech_init_error
                 )
-
                 return
 
             available = (
@@ -1503,9 +1451,7 @@ class VoiceAssistantApp(App):
             )
 
             if not available:
-
                 self.speech_recognizer_ready = False
-
                 self.speech_init_error = (
                     "No RecognitionService available"
                 )
@@ -1514,7 +1460,6 @@ class VoiceAssistantApp(App):
                     "811:",
                     self.speech_init_error
                 )
-
                 return
 
             outer = self
@@ -1522,102 +1467,69 @@ class VoiceAssistantApp(App):
             class RecognitionListener(
                 PythonJavaClass
             ):
-
                 __javainterfaces__ = [
                     "android/speech/"
                     "RecognitionListener"
                 ]
+                __javacontext__ = "app"
 
-                @java_method(
-                    "(Landroid/os/Bundle;)V"
-                )
-                def onReadyForSpeech(
-                    self,
-                    params
-                ):
-
+@java_method( "(Landroid/os/Bundle;)V" )
+                def onReadyForSpeech( self, params ):
                     outer.on_speech_ready()
 
-                @java_method(
-                    "()V"
-                )
-                def onBeginningOfSpeech(
-                    self
-                ):
-
+@java_method( "()V" )
+                def onBeginningOfSpeech( self ):
                     outer.on_speech_begin()
 
-                @java_method(
-                    "(F)V"
-                )
-                def onRmsChanged(
-                    self,
-                    rmsdB
-                ):
+@java_method( "(F)V" )
+                def onRmsChanged( self, rmsdB ):
                     pass
 
-                @java_method(
-                    "([B)V"
-                )
-                def onBufferReceived(
-                    self,
-                    buffer
-                ):
+@java_method( "([B)V" )
+                def onBufferReceived( self, buffer ):
                     pass
 
-                @java_method(
-                    "()V"
-                )
-                def onEndOfSpeech(
-                    self
-                ):
-
+@java_method( "()V" )
+                def onEndOfSpeech( self ):
                     outer.on_speech_end()
 
-                @java_method(
-                    "(I)V"
-                )
-                def onError(
-                    self,
-                    error
-                ):
-
+@java_method( "(I)V" )
+                def onError( self, error ):
                     outer.on_speech_error(
                         int(error)
                     )
 
-                @java_method(
-                    "(Landroid/os/Bundle;)V"
-                )
-                def onResults(
-                    self,
-                    results
-                ):
-
-                    outer.on_speech_results(
-                        results
+@java_method( "(Landroid/os/Bundle;)V" )
+                def onResults( self, results ):
+                    # Important:
+                    # Extract Java Bundle data inside the Java callback.
+                    # Only a normal Python string crosses to Kivy's thread.
+                    text = (
+                        outer
+                        ._extract_speech_results(
+                            results
+                        )
                     )
 
-                @java_method(
-                    "(Landroid/os/Bundle;)V"
-                )
-                def onPartialResults(
-                    self,
-                    results
-                ):
-
-                    outer.on_speech_partial_results(
-                        results
+                    outer.on_speech_results_text(
+                        text
                     )
 
-                @java_method(
-                    "(ILandroid/os/Bundle;)V"
-                )
-                def onEvent(
-                    self,
-                    event_type,
-                    params
-                ):
+@java_method( "(Landroid/os/Bundle;)V" )
+                def onPartialResults( self, results ):
+                    text = (
+                        outer
+                        ._extract_speech_results(
+                            results
+                        )
+                    )
+
+                    outer.on_speech_partial_text(
+                        text
+                    )
+
+@java_method( "(ILandroid/os/Bundle;)V" )
+                def onEvent( self, event_type, params ):
                     pass
 
             self._speech_listener = (
@@ -1632,9 +1544,7 @@ class VoiceAssistantApp(App):
             )
 
             if recognizer is None:
-
                 self.speech_recognizer_ready = False
-
                 self.speech_init_error = (
                     "createSpeechRecognizer returned null"
                 )
@@ -1643,7 +1553,6 @@ class VoiceAssistantApp(App):
                     "811:",
                     self.speech_init_error
                 )
-
                 return
 
             self.speech_recognizer = recognizer
@@ -1653,7 +1562,6 @@ class VoiceAssistantApp(App):
             )
 
             self.speech_recognizer_ready = True
-
             self.speech_init_error = ""
 
             print(
@@ -1661,9 +1569,7 @@ class VoiceAssistantApp(App):
             )
 
         except Exception as exc:
-
             self.speech_recognizer = None
-
             self.speech_recognizer_ready = False
 
             self.speech_init_error = (
@@ -1685,17 +1591,12 @@ class VoiceAssistantApp(App):
     # START LISTENING
     # =====================================================
 
-    def start_listening(
-        self
-    ):
-
+    def start_listening( self ):
         if platform != "android":
-
             self.set_state(
                 "error",
                 "الاستماع الصوتي متاح على Android فقط."
             )
-
             return
 
         if self.processing:
@@ -1704,14 +1605,23 @@ class VoiceAssistantApp(App):
         if self.is_listening:
             return
 
-        if not self.speech_recognizer_ready:
+        if not self._has_record_audio_permission():
+            self._request_record_audio_permission()
 
+            self.set_state(
+                "error",
+                "صلاحية الميكروفون غير مفعلة.\n"
+                "تم طلب صلاحية RECORD_AUDIO.\n"
+                "وافق عليها ثم اضغط للتحدث مرة أخرى."
+            )
+            return
+
+        if not self.speech_recognizer_ready:
             message = (
                 "محرك التعرف على الكلام غير جاهز."
             )
 
             if self.speech_init_error:
-
                 message += (
                     "\n\n"
                     + self.speech_init_error
@@ -1722,18 +1632,19 @@ class VoiceAssistantApp(App):
                 message
             )
 
+            # Try initialization one more time in case permissions
+            # were granted after app startup.
+            self.init_native_speech()
             return
+
+        self.speech_recovery_attempts = 0
 
         self._run_on_android_ui(
             self._start_listening_on_ui
         )
 
-    def _start_listening_on_ui(
-        self
-    ):
-
+    def _start_listening_on_ui( self ):
         try:
-
             from jnius import autoclass
 
             Intent = autoclass(
@@ -1756,11 +1667,16 @@ class VoiceAssistantApp(App):
                 .LANGUAGE_MODEL_FREE_FORM
             )
 
-            intent.putExtra(
-                RecognizerIntent
-                .EXTRA_LANGUAGE,
-                "ar-IQ"
+            language = (
+                self._current_speech_language()
             )
+
+            if language:
+                intent.putExtra(
+                    RecognizerIntent
+                    .EXTRA_LANGUAGE,
+                    language
+                )
 
             intent.putExtra(
                 RecognizerIntent
@@ -1780,15 +1696,26 @@ class VoiceAssistantApp(App):
                 "تحدث الآن"
             )
 
-            self.is_listening = True
-
-            self.set_state(
-                "listening",
-                "جاري الاستماع..."
+            print(
+                "811: startListening language:",
+                self._speech_language_label()
             )
 
             self.speech_recognizer.startListening(
                 intent
+            )
+
+            self.is_listening = True
+
+            Clock.schedule_once(
+                lambda dt:
+                self.set_state(
+                    "listening",
+                    "جاري الاستماع...\n"
+                    "اللغة: "
+                    + self._speech_language_label()
+                ),
+                0
             )
 
             print(
@@ -1796,7 +1723,6 @@ class VoiceAssistantApp(App):
             )
 
         except Exception as exc:
-
             self.is_listening = False
 
             print(
@@ -1804,42 +1730,38 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
 
-            self.set_state(
-                "error",
+            message = (
                 "تعذر بدء الاستماع.\n"
                 + type(exc).__name__
                 + ": "
                 + str(exc)
             )
 
+            Clock.schedule_once(
+                lambda dt:
+                self.set_state(
+                    "error",
+                    message
+                ),
+                0
+            )
+
     # =====================================================
     # STOP LISTENING
     # =====================================================
 
-    def stop_listening(
-        self
-    ):
-
-        if (
-            self.speech_recognizer
-            is None
-        ):
+    def stop_listening( self ):
+        if self.speech_recognizer is None:
             return
 
         self._run_on_android_ui(
             self._stop_listening_on_ui
         )
 
-    def _stop_listening_on_ui(
-        self
-    ):
-
+    def _stop_listening_on_ui( self ):
         try:
-
             self.speech_recognizer.stopListening()
-
         except Exception as exc:
-
             print(
                 "811: stopListening error:",
                 repr(exc)
@@ -1848,25 +1770,23 @@ class VoiceAssistantApp(App):
         self.is_listening = False
 
         if not self.processing:
-
-            self.set_state(
-                "ready"
+            Clock.schedule_once(
+                lambda dt:
+                self.set_state(
+                    "ready"
+                ),
+                0
             )
 
     # =====================================================
     # SPEECH RESULTS
     # =====================================================
 
-    def _extract_speech_results(
-        self,
-        results
-    ):
-
+    def _extract_speech_results( self, results ):
         if results is None:
             return ""
 
         try:
-
             SpeechRecognizer = (
                 self._speech_autoclass(
                     "android.speech."
@@ -1893,99 +1813,64 @@ class VoiceAssistantApp(App):
             )
 
         except Exception as exc:
-
             print(
                 "811: speech result error:",
                 repr(exc)
             )
-
             return ""
 
     # =====================================================
     # SPEECH CALLBACKS
     # =====================================================
 
-    @mainthread
-    def on_speech_ready(
-        self
-    ):
-
+@mainthread
+    def on_speech_ready( self ):
         if not self.processing:
-
             self.set_state(
                 "listening",
-                "تحدث الآن..."
+                "تحدث الآن...\n"
+                "اللغة: "
+                + self._speech_language_label()
             )
 
-    @mainthread
-    def on_speech_begin(
-        self
-    ):
-
+@mainthread
+    def on_speech_begin( self ):
         self.set_state(
             "listening",
             "أستمع إليك..."
         )
 
-    @mainthread
-    def on_speech_end(
-        self
-    ):
-
+@mainthread
+    def on_speech_end( self ):
         if self.is_listening:
-
             self.set_state(
                 "thinking",
                 "جاري فهم كلامك..."
             )
 
-    @mainthread
-    def on_speech_partial_results(
-        self,
-        results
-    ):
-
-        text = (
-            self._extract_speech_results(
-                results
-            )
-        )
-
+@mainthread
+    def on_speech_partial_text( self, text ):
         text = clean_unicode(
             text
         )
 
         if text:
-
-            self.output_label.text = (
-                fix_text(
-                    "أنت:\n"
-                    + text
-                )
+            self.output_label.text = fix_text(
+                "أنت:\n"
+                + text
             )
 
-    @mainthread
-    def on_speech_results(
-        self,
-        results
-    ):
-
+@mainthread
+    def on_speech_results_text( self, text ):
         self.is_listening = False
-
-        text = (
-            self._extract_speech_results(
-                results
-            )
-        )
+        self.speech_recovery_attempts = 0
 
         text = clean_unicode(
             text
         )
 
         if not text:
-
             self.processing = False
-
             self.speak_btn.disabled = False
 
             self.set_state(
@@ -1998,7 +1883,6 @@ class VoiceAssistantApp(App):
                 self._return_to_ready(),
                 2.0
             )
-
             return
 
         groq_key = (
@@ -2008,20 +1892,16 @@ class VoiceAssistantApp(App):
         )
 
         if not groq_key:
-
             self.processing = False
-
             self.speak_btn.disabled = False
 
             self.set_state(
                 "error",
                 "أدخل مفتاح Groq أولاً."
             )
-
             return
 
         self.processing = True
-
         self.speak_btn.disabled = True
 
         self.set_state(
@@ -2041,97 +1921,247 @@ class VoiceAssistantApp(App):
             daemon=True
         ).start()
 
-    @mainthread
-    def on_speech_error(
-        self,
-        error_code
-    ):
-
+@mainthread
+    def on_speech_error( self, error_code ):
         self.is_listening = False
 
-        print(
-            "811 SpeechRecognizer error:",
+        error_code = int(
             error_code
         )
 
-        errors = {
-
-            1:
-                "خطأ في الشبكة.",
-
-            2:
-                "تعذر الاتصال بخدمة التعرف.",
-
-            3:
-                "تعذر تسجيل الصوت.",
-
-            4:
-                "تعذر فهم طلب الاستماع.",
-
-            5:
-                "تعذر مطابقة الكلام.",
-
-            6:
-                "انتهت مهلة الاستماع.",
-
-            7:
-                "لم يتم العثور على كلام.",
-
-            8:
-                "طلبات كثيرة جدًا.",
-
-            9:
-                "صلاحية الميكروفون غير متاحة.",
-
-            10:
-                "تم رفض طلب الاستماع.",
-
-            11:
-                "لم تتوفر شبكة مناسبة.",
-
-            12:
-                "الخدمة غير متاحة.",
-
-            13:
-                "ميزة التعرف غير متاحة."
-        }
-
-        message = errors.get(
-            int(error_code),
-            "حدث خطأ في التعرف على الكلام."
+        error_name, description = (
+            self._speech_error_info(
+                error_code
+            )
         )
 
-        self.processing = False
+        self.speech_last_error_code = (
+            error_code
+        )
 
+        self.speech_last_error_name = (
+            error_name
+        )
+
+        print(
+            "811 SpeechRecognizer error:",
+            error_code,
+            error_name,
+            "| language:",
+            self._speech_language_label()
+        )
+
+        # -------------------------------------------------
+        # Automatic language fallback
+        # -------------------------------------------------
+
+        if error_code in (12, 13):
+            next_index = (
+                self.speech_language_index + 1
+            )
+
+            if next_index < len(
+                self.speech_languages
+            ):
+                old_language = (
+                    self._speech_language_label()
+                )
+
+                self.speech_language_index = (
+                    next_index
+                )
+
+                new_language = (
+                    self._speech_language_label()
+                )
+
+                self.set_state(
+                    "listening",
+                    "لغة التعرف "
+                    + old_language
+                    + " غير متاحة.\n"
+                    + "أجرب تلقائياً: "
+                    + new_language
+                )
+
+                print(
+                    "811: Speech language fallback:",
+                    old_language,
+                    "->",
+                    new_language
+                )
+
+                Clock.schedule_once(
+                    lambda dt:
+                    self._run_on_android_ui(
+                        self._start_listening_on_ui
+                    ),
+                    0.35
+                )
+                return
+
+        # -------------------------------------------------
+        # Permission recovery
+        # -------------------------------------------------
+
+        if error_code == 9:
+            self._request_record_audio_permission()
+
+            self.processing = False
+            self.speak_btn.disabled = False
+
+            self.set_state(
+                "error",
+                "SpeechRecognizer Error "
+                + str(error_code)
+                + "\n"
+                + error_name
+                + "\n\n"
+                + description
+                + "\n\n"
+                + "تم طلب صلاحية الميكروفون مرة أخرى."
+            )
+            return
+
+        # -------------------------------------------------
+        # One safe automatic recognizer recovery
+        # -------------------------------------------------
+
+        if (
+            error_code in (5, 8, 11)
+            and self.speech_recovery_attempts
+            < self.speech_max_recovery_attempts
+        ):
+            self.speech_recovery_attempts += 1
+
+            self.set_state(
+                "listening",
+                "SpeechRecognizer Error "
+                + str(error_code)
+                + "\n"
+                + error_name
+                + "\n\n"
+                + "أعيد تهيئة محرك الصوت مرة واحدة..."
+            )
+
+            Clock.schedule_once(
+                lambda dt:
+                self._run_on_android_ui(
+                    self._recreate_speech_and_retry_on_ui
+                ),
+                0.45
+            )
+            return
+
+        # -------------------------------------------------
+        # Final diagnostic error shown on screen
+        # -------------------------------------------------
+
+        self.processing = False
         self.speak_btn.disabled = False
+
+        diagnostic_message = (
+            "SpeechRecognizer Error "
+            + str(error_code)
+            + "\n"
+            + error_name
+            + "\n\n"
+            + description
+            + "\n\n"
+            + "Language: "
+            + self._speech_language_label()
+        )
 
         self.set_state(
             "error",
-            message
+            diagnostic_message
         )
 
+        # Keep the diagnostic visible longer so it can be
+        # photographed or copied.
         Clock.schedule_once(
             lambda dt:
             self._return_to_ready(),
-            2.0
+            6.0
         )
+
+    # =====================================================
+    # SPEECH RECOVERY
+    # =====================================================
+
+    def _recreate_speech_and_retry_on_ui( self ):
+        try:
+            if self.speech_recognizer is not None:
+                try:
+                    self.speech_recognizer.cancel()
+                except Exception:
+                    pass
+
+                try:
+                    self.speech_recognizer.destroy()
+                except Exception:
+                    pass
+
+            self.speech_recognizer = None
+            self.speech_recognizer_ready = False
+            self._speech_listener = None
+
+            print(
+                "811: Recreating SpeechRecognizer..."
+            )
+
+            self._init_native_speech_on_ui()
+
+            if not self.speech_recognizer_ready:
+                message = (
+                    "فشلت إعادة تهيئة SpeechRecognizer.\n"
+                    + self.speech_init_error
+                )
+
+                Clock.schedule_once(
+                    lambda dt:
+                    self.set_state(
+                        "error",
+                        message
+                    ),
+                    0
+                )
+                return
+
+            self._start_listening_on_ui()
+
+        except Exception as exc:
+            print(
+                "811: SpeechRecognizer recovery failed:",
+                repr(exc)
+            )
+
+            message = (
+                "فشلت إعادة تهيئة محرك الصوت.\n"
+                + type(exc).__name__
+                + ": "
+                + str(exc)
+            )
+
+            Clock.schedule_once(
+                lambda dt:
+                self.set_state(
+                    "error",
+                    message
+                ),
+                0
+            )
 
     # =====================================================
     # BUTTON
     # =====================================================
 
-    def on_speak_click(
-        self,
-        instance
-    ):
-
+    def on_speak_click( self, instance ):
         if self.processing:
             return
 
         if self.is_listening:
-
             self.stop_listening()
-
             return
 
         groq_key = (
@@ -2141,12 +2171,10 @@ class VoiceAssistantApp(App):
         )
 
         if not groq_key:
-
             self.set_state(
                 "error",
                 "يرجى إدخال مفتاح Groq API أولاً."
             )
-
             return
 
         self.start_listening()
@@ -2155,20 +2183,12 @@ class VoiceAssistantApp(App):
     # AI PIPELINE
     # =====================================================
 
-    def process_user_text(
-        self,
-        user_text,
-        groq_key
-    ):
-
+    def process_user_text( self, user_text, groq_key ):
         try:
-
             if self.ai_engine is None:
-
                 self.update_error(
                     "تعذر تهيئة محرك الذكاء الاصطناعي."
                 )
-
                 return
 
             self.ai_engine.groq_key = (
@@ -2189,7 +2209,6 @@ class VoiceAssistantApp(App):
             )
 
             if not response:
-
                 response = (
                     "لم يصلني رد من "
                     "الذكاء الاصطناعي."
@@ -2201,7 +2220,6 @@ class VoiceAssistantApp(App):
             )
 
         except Exception as exc:
-
             print(
                 "811: AI pipeline error:",
                 repr(exc)
@@ -2211,15 +2229,9 @@ class VoiceAssistantApp(App):
                 "حدث خطأ أثناء معالجة طلبك."
             )
 
-    @mainthread
-    def update_voice_conversation(
-        self,
-        user_text,
-        response
-    ):
-
+@mainthread
+    def update_voice_conversation( self, user_text, response ):
         self.processing = False
-
         self.speak_btn.disabled = False
 
         message = (
@@ -2247,14 +2259,9 @@ class VoiceAssistantApp(App):
             2.5
         )
 
-    @mainthread
-    def update_error(
-        self,
-        message
-    ):
-
+@mainthread
+    def update_error( self, message ):
         self.processing = False
-
         self.speak_btn.disabled = False
 
         self.set_state(
@@ -2272,11 +2279,7 @@ class VoiceAssistantApp(App):
     # READY
     # =====================================================
 
-    def _return_to_ready(
-        self,
-        *args
-    ):
-
+    def _return_to_ready( self, *args ):
         if self.processing:
             return
 
@@ -2291,16 +2294,11 @@ class VoiceAssistantApp(App):
     # CLEAR
     # =====================================================
 
-    def on_clear_click(
-        self,
-        instance
-    ):
-
+    def on_clear_click( self, instance ):
         if self.processing:
             return
 
         if self.is_listening:
-
             self.stop_listening()
 
         self.output_label.text = fix_text(
@@ -2310,13 +2308,9 @@ class VoiceAssistantApp(App):
         )
 
         if self.ai_engine is not None:
-
             try:
-
                 self.ai_engine.clear_history()
-
             except Exception as exc:
-
                 print(
                     "811: clear_history error:",
                     repr(exc)
@@ -2332,38 +2326,25 @@ class VoiceAssistantApp(App):
     # STOP
     # =====================================================
 
-    def on_stop(
-        self
-    ):
-
+    def on_stop( self ):
         try:
-
-            if (
-                self.speech_recognizer
-                is not None
-            ):
-
+            if self.speech_recognizer is not None:
                 self._run_on_android_ui(
                     self._destroy_speech_on_ui
                 )
 
         except Exception as exc:
-
             print(
                 "811: SpeechRecognizer destroy error:",
                 repr(exc)
             )
 
         try:
-
             if self.tts is not None:
-
                 self.tts.stop()
-
                 self.tts.shutdown()
 
         except Exception as exc:
-
             print(
                 "811: TTS shutdown error:",
                 repr(exc)
@@ -2371,28 +2352,24 @@ class VoiceAssistantApp(App):
 
         super().on_stop()
 
-    def _destroy_speech_on_ui(
-        self
-    ):
-
+    def _destroy_speech_on_ui( self ):
         try:
-
             if self.speech_recognizer is not None:
-
-                self.speech_recognizer.cancel()
+                try:
+                    self.speech_recognizer.cancel()
+                except Exception:
+                    pass
 
                 self.speech_recognizer.destroy()
-
                 self.speech_recognizer = None
-
                 self.speech_recognizer_ready = False
+                self._speech_listener = None
 
                 print(
                     "811: SpeechRecognizer destroyed"
                 )
 
         except Exception as exc:
-
             print(
                 "811: SpeechRecognizer shutdown error:",
                 repr(exc)
