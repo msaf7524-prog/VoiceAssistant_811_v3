@@ -26,7 +26,7 @@ from ai_client import AIClient
 # VERSION
 # =========================================================
 
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 
 
 # =========================================================
@@ -41,30 +41,98 @@ FONT_PATH = os.path.join(BASE_DIR, "Cairo-Regular.ttf")
 # ARABIC FONT
 # =========================================================
 
-# Keep Kivy on the bundled Cairo font. It supports Arabic and Latin together
-# and avoids OEM-specific Android fonts that can miss Latin/presentation glyphs.
-ARABIC_FONT = "Roboto"
+def _find_phone_arabic_font():
+    """Use Android's own Noto Arabic font without placing native Views over Kivy."""
+    if platform != "android":
+        return ""
 
-if os.path.exists(FONT_PATH):
+    preferred_paths = [
+        "/system/fonts/NotoSansArabic-Regular.ttf",
+        "/system/fonts/NotoSansArabicUI-Regular.ttf",
+        "/system/fonts/NotoNaskhArabic-Regular.ttf",
+        "/system/fonts/NotoNaskhArabicUI-Regular.ttf",
+        "/system/fonts/NotoKufiArabic-Regular.ttf",
+        "/system/fonts/DroidSansArabic.ttf",
+        "/system/fonts/DroidSansFallback.ttf",
+    ]
+
+    for font_path in preferred_paths:
+        if os.path.isfile(font_path):
+            return font_path
+
+    # OEMs sometimes rename Noto files. Only accept Arabic Noto/Droid fonts;
+    # do not pick an arbitrary OEM font because it may lack presentation forms.
+    try:
+        font_dir = "/system/fonts"
+        if os.path.isdir(font_dir):
+            candidates = []
+            for filename in os.listdir(font_dir):
+                lower = filename.lower()
+                if not lower.endswith((".ttf", ".otf")):
+                    continue
+                if "arab" not in lower:
+                    continue
+                if "noto" not in lower and "droid" not in lower:
+                    continue
+
+                score = 0
+                if "notosansarabic" in lower:
+                    score += 100
+                if "notonaskharabic" in lower:
+                    score += 90
+                if "notokufiarabic" in lower:
+                    score += 80
+                if "ui" in lower:
+                    score += 8
+                if "regular" in lower:
+                    score += 6
+                if any(x in lower for x in ("bold", "black", "thin", "light")):
+                    score -= 20
+
+                candidates.append((score, os.path.join(font_dir, filename)))
+
+            if candidates:
+                candidates.sort(key=lambda item: item[0], reverse=True)
+                return candidates[0][1]
+    except Exception as exc:
+        print("811: Android Arabic font scan warning:", repr(exc))
+
+    return ""
+
+
+ARABIC_FONT = "Roboto"
+PHONE_ARABIC_FONT_PATH = _find_phone_arabic_font()
+
+if PHONE_ARABIC_FONT_PATH:
     try:
         LabelBase.register(
-            name="Cairo",
-            fn_regular=FONT_PATH
+            name="PhoneArabic",
+            fn_regular=PHONE_ARABIC_FONT_PATH
         )
-        ARABIC_FONT = "Cairo"
+        ARABIC_FONT = "PhoneArabic"
         print(
-            "811: Cairo-Regular.ttf loaded successfully"
+            "811: Phone Arabic font loaded:",
+            PHONE_ARABIC_FONT_PATH
         )
     except Exception as exc:
         print(
-            "811: Cairo font registration error:",
+            "811: Phone Arabic font registration error:",
             repr(exc)
         )
-else:
-    print(
-        "811: Cairo-Regular.ttf NOT FOUND:",
-        FONT_PATH
-    )
+
+if ARABIC_FONT == "Roboto":
+    if os.path.exists(FONT_PATH):
+        try:
+            LabelBase.register(
+                name="Cairo",
+                fn_regular=FONT_PATH
+            )
+            ARABIC_FONT = "Cairo"
+            print("811: Cairo-Regular.ttf loaded as Arabic fallback")
+        except Exception as exc:
+            print("811: Cairo font registration error:", repr(exc))
+    else:
+        print("811: Cairo-Regular.ttf NOT FOUND:", FONT_PATH)
 
 
 # =========================================================
@@ -422,6 +490,10 @@ class VoiceAssistantApp(App):
         self.processing = False
         self.ai_engine = None
 
+        # Incremented whenever a new AI request starts or Clear cancels work.
+        # Late replies from an older background request are ignored safely.
+        self._request_serial = 0
+
         # -------------------------
         # TTS
         # -------------------------
@@ -436,6 +508,7 @@ class VoiceAssistantApp(App):
         self.tts_is_speaking = False
         self._tts_pending_text = ""
         self._tts_listener = None
+        self._tts_watch_generation = 0
 
         # -------------------------
         # SpeechRecognizer
@@ -452,6 +525,7 @@ class VoiceAssistantApp(App):
         self.speech_init_error = ""
         self.speech_last_error_code = 0
         self.speech_last_error_name = ""
+        self._ignore_next_speech_error = False
 
         # Prefer Iraqi Arabic, then Saudi Arabic, then generic Arabic,
         # and finally allow Android to use its own default language.
@@ -567,7 +641,7 @@ class VoiceAssistantApp(App):
 
         self.title_label = Label(
             text="VOICE ASSISTANT 811",
-            font_name=self.arabic_font,
+            font_name="Roboto",
             font_size="23sp",
             bold=True,
             color=(
@@ -855,13 +929,13 @@ class VoiceAssistantApp(App):
         # =================================================
 
         self.footer_label = Label(
-            text=fix_text(
+            text=(
                 "Speech Recognition • "
                 "Native TTS • "
                 "Cairo Arabic • "
                 "Groq AI"
             ),
-            font_name=self.arabic_font,
+            font_name="Roboto",
             font_size="11sp",
             color=(
                 0.38,
@@ -1732,8 +1806,15 @@ class VoiceAssistantApp(App):
                 "811: TTS speak queued successfully"
             )
 
+            self._tts_watch_generation += 1
+            watch_generation = self._tts_watch_generation
+
             Clock.schedule_once(
-                self._watch_tts_completion,
+                lambda dt:
+                self._watch_tts_completion(
+                    dt,
+                    watch_generation
+                ),
                 0.35
             )
 
@@ -1756,8 +1837,13 @@ class VoiceAssistantApp(App):
 
     def _watch_tts_completion(
         self,
-        dt
+        dt,
+        watch_generation
     ):
+        # A Clear/interrupt increments the generation, invalidating old watchers.
+        if watch_generation != self._tts_watch_generation:
+            return
+
         if platform != "android":
             self.tts_is_speaking = False
             return
@@ -1770,7 +1856,11 @@ class VoiceAssistantApp(App):
                 self.tts_is_speaking = True
 
                 Clock.schedule_once(
-                    self._watch_tts_completion,
+                    lambda next_dt:
+                    self._watch_tts_completion(
+                        next_dt,
+                        watch_generation
+                    ),
                     0.30
                 )
                 return
@@ -1783,6 +1873,34 @@ class VoiceAssistantApp(App):
 
         self.tts_is_speaking = False
         self._return_to_ready()
+
+    def stop_speaking(
+        self
+    ):
+        """Immediately stop queued/current Android TTS without shutting it down."""
+        self._tts_pending_text = ""
+        self.tts_is_speaking = False
+        self._tts_watch_generation += 1
+
+        if platform != "android":
+            return
+
+        if self.tts is None:
+            return
+
+        self._run_on_android_ui(
+            self._stop_speaking_on_android_ui
+        )
+
+    def _stop_speaking_on_android_ui(
+        self
+    ):
+        try:
+            if self.tts is not None:
+                result = self.tts.stop()
+                print("811: TTS stopped by user; result:", result)
+        except Exception as exc:
+            print("811: TTS stop error:", repr(exc))
 
     def _show_tts_error(
         self
@@ -2428,6 +2546,43 @@ class VoiceAssistantApp(App):
                 0
             )
 
+    def cancel_listening(
+        self
+    ):
+        """Cancel SpeechRecognizer without accepting a final result."""
+        self.is_listening = False
+
+        if self.speech_recognizer is None:
+            return
+
+        self._ignore_next_speech_error = True
+        self._run_on_android_ui(
+            self._cancel_listening_on_ui
+        )
+
+        # Android commonly reports ERROR_CLIENT after cancel(). Ignore only
+        # that immediate callback; clear the guard if no callback arrives.
+        Clock.schedule_once(
+            self._clear_speech_cancel_guard,
+            1.0
+        )
+
+    def _cancel_listening_on_ui(
+        self
+    ):
+        try:
+            if self.speech_recognizer is not None:
+                self.speech_recognizer.cancel()
+                print("811: SpeechRecognizer cancelled by user")
+        except Exception as exc:
+            print("811: SpeechRecognizer cancel error:", repr(exc))
+
+    def _clear_speech_cancel_guard(
+        self,
+        dt
+    ):
+        self._ignore_next_speech_error = False
+
     # =====================================================
     # SPEECH RESULTS
     # =====================================================
@@ -2568,6 +2723,8 @@ class VoiceAssistantApp(App):
 
         self.processing = True
         self.speak_btn.disabled = True
+        self._request_serial += 1
+        request_serial = self._request_serial
 
         self.set_state(
             "thinking",
@@ -2581,7 +2738,8 @@ class VoiceAssistantApp(App):
             target=self.process_user_text,
             args=(
                 text,
-                groq_key
+                groq_key,
+                request_serial
             ),
             daemon=True
         ).start()
@@ -2596,6 +2754,14 @@ class VoiceAssistantApp(App):
         error_code = int(
             error_code
         )
+
+        if self._ignore_next_speech_error:
+            self._ignore_next_speech_error = False
+            print(
+                "811: Ignored SpeechRecognizer error after user cancel:",
+                error_code
+            )
+            return
 
         error_name, description = (
             self._speech_error_info(
@@ -2837,6 +3003,10 @@ class VoiceAssistantApp(App):
             self.stop_listening()
             return
 
+        # Voice barge-in: pressing Talk while 811 is speaking stops TTS first.
+        if self.tts_is_speaking or self._tts_pending_text:
+            self.stop_speaking()
+
         groq_key = (
             self.key_input
             .text
@@ -2859,12 +3029,17 @@ class VoiceAssistantApp(App):
     def process_user_text(
         self,
         user_text,
-        groq_key
+        groq_key,
+        request_serial
     ):
         try:
+            if request_serial != self._request_serial:
+                return
+
             if self.ai_engine is None:
                 self.update_error(
-                    "تعذر تهيئة محرك الذكاء الاصطناعي."
+                    "تعذر تهيئة محرك الذكاء الاصطناعي.",
+                    request_serial
                 )
                 return
 
@@ -2891,9 +3066,14 @@ class VoiceAssistantApp(App):
                     "الذكاء الاصطناعي."
                 )
 
+            if request_serial != self._request_serial:
+                print("811: Ignored stale AI response after Clear/interrupt")
+                return
+
             self.update_voice_conversation(
                 user_text,
-                response
+                response,
+                request_serial
             )
 
         except Exception as exc:
@@ -2903,15 +3083,20 @@ class VoiceAssistantApp(App):
             )
 
             self.update_error(
-                "حدث خطأ أثناء معالجة طلبك."
+                "حدث خطأ أثناء معالجة طلبك.",
+                request_serial
             )
 
     @mainthread
     def update_voice_conversation(
         self,
         user_text,
-        response
+        response,
+        request_serial
     ):
+        if request_serial != self._request_serial:
+            return
+
         self.processing = False
         self.speak_btn.disabled = False
 
@@ -2939,8 +3124,15 @@ class VoiceAssistantApp(App):
     @mainthread
     def update_error(
         self,
-        message
+        message,
+        request_serial=None
     ):
+        if (
+            request_serial is not None
+            and request_serial != self._request_serial
+        ):
+            return
+
         self.processing = False
         self.speak_btn.disabled = False
 
@@ -2981,11 +3173,16 @@ class VoiceAssistantApp(App):
         self,
         instance
     ):
-        if self.processing:
-            return
+        # Clear is an emergency stop as well as a conversation reset.
+        # It must work while listening, thinking, or speaking.
+        self._request_serial += 1
+        self.processing = False
+        self.speak_btn.disabled = False
 
         if self.is_listening:
-            self.stop_listening()
+            self.cancel_listening()
+
+        self.stop_speaking()
 
         self._set_chat_text(
             "تم مسح الشاشة.\n"
