@@ -29,10 +29,10 @@ from ai_client import AIClient
 
 
 # =========================================================
-# VERSION 0.3.2
+# VERSION 0.3.3
 # =========================================================
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 
 # =========================================================
@@ -404,17 +404,14 @@ def request_android_permissions():
 # STATUS ORB
 # =========================================================
 
+
 class StatusOrb(Widget):
-    """Living state orb: breathes, ripples and reacts to microphone RMS."""
+    """Startup-safe orb. Animation is temporarily disabled until runtime stability is reconfirmed."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.state = "ready"
         self.status_color = (0.13, 0.59, 0.95, 1.0)
-        self.phase = 0.0
-        self.audio_level = 0.0
-        self.target_level = 0.0
-        self._anim_event = Clock.schedule_interval(self._animate, 1.0 / 30.0)
         self.bind(pos=self._redraw, size=self._redraw)
 
     def set_state(self, state):
@@ -427,156 +424,65 @@ class StatusOrb(Widget):
         }
         self.state = state if state in colors else "ready"
         self.status_color = colors[self.state]
-        if self.state != "listening":
-            self.target_level = 0.0
         self._redraw()
 
     def set_level(self, rms_db):
-        """Feed Android SpeechRecognizer RMS into the orb (roughly -2..10 dB)."""
-        try:
-            value = (float(rms_db) + 2.0) / 12.0
-        except Exception:
-            value = 0.0
-        self.target_level = max(0.0, min(1.0, value))
-
-    def _animate(self, dt):
-        speed = {
-            "ready": 1.0,
-            "listening": 2.8,
-            "thinking": 3.6,
-            "speaking": 4.0,
-            "error": 5.0,
-        }.get(self.state, 1.0)
-        self.phase = (self.phase + dt * speed) % (math.pi * 2.0)
-        self.audio_level += (self.target_level - self.audio_level) * 0.24
-        if self.state != "listening":
-            self.audio_level *= 0.93
-        self._redraw()
+        # Kept for API compatibility with SpeechRecognizer callbacks.
+        # Live RMS animation will be re-enabled only after launch stability is confirmed.
+        return
 
     def _redraw(self, *args):
         self.canvas.clear()
+
         if self.width <= 0 or self.height <= 0:
             return
 
-        cx = self.center_x
-        cy = self.center_y
-        base = min(self.width, self.height) * 0.205
-
-        if self.state == "listening":
-            energy = 0.12 + self.audio_level * 0.34
-        elif self.state == "speaking":
-            energy = 0.18 + 0.10 * (0.5 + 0.5 * math.sin(self.phase * 2.0))
-        elif self.state == "thinking":
-            energy = 0.13 + 0.07 * (0.5 + 0.5 * math.sin(self.phase * 1.7))
-        elif self.state == "error":
-            energy = 0.12 + 0.08 * abs(math.sin(self.phase * 2.0))
-        else:
-            energy = 0.08 + 0.035 * (0.5 + 0.5 * math.sin(self.phase))
-
         with self.canvas:
-            # Three travelling ripples give a calm "alive" feeling.
-            for idx in range(3):
-                wave = ((self.phase / (math.pi * 2.0)) + idx / 3.0) % 1.0
-                scale = 1.55 + wave * 1.95 + energy
-                alpha = max(0.0, (1.0 - wave) * (0.15 + energy * 0.23))
-                radius = base * scale
-                Color(
-                    self.status_color[0],
-                    self.status_color[1],
-                    self.status_color[2],
-                    alpha,
-                )
-                Line(circle=(cx, cy, radius), width=max(1.0, 2.1 - wave))
+            cx = self.center_x
+            cy = self.center_y
+            radius = min(self.width, self.height) * 0.22
 
-            glow_radius = base * (1.55 + energy * 0.9)
             Color(
                 self.status_color[0],
                 self.status_color[1],
                 self.status_color[2],
-                0.14 + energy * 0.18,
+                0.10
             )
             Ellipse(
-                pos=(cx - glow_radius, cy - glow_radius),
-                size=(glow_radius * 2.0, glow_radius * 2.0),
+                pos=(cx - radius * 2.4, cy - radius * 2.4),
+                size=(radius * 4.8, radius * 4.8)
             )
 
-            core_radius = base * (1.0 + energy * 0.35)
+            Color(
+                self.status_color[0],
+                self.status_color[1],
+                self.status_color[2],
+                0.18
+            )
+            Ellipse(
+                pos=(cx - radius * 1.75, cy - radius * 1.75),
+                size=(radius * 3.5, radius * 3.5)
+            )
+
             Color(*self.status_color)
             Ellipse(
-                pos=(cx - core_radius, cy - core_radius),
-                size=(core_radius * 2.0, core_radius * 2.0),
+                pos=(cx - radius, cy - radius),
+                size=(radius * 2, radius * 2)
             )
 
-            Color(1, 1, 1, 0.23)
-            Line(circle=(cx, cy, core_radius * 0.84), width=1.15)
-
-            # Five tiny equalizer bars inside the core. Listening uses real RMS;
-            # thinking/speaking use smooth procedural motion.
-            bar_w = max(dp(2), core_radius * 0.10)
-            gap = bar_w * 0.75
-            for idx in range(5):
-                offset = idx - 2
-                motion = 0.5 + 0.5 * math.sin(self.phase * 2.2 + idx * 0.95)
-                if self.state == "listening":
-                    motion = min(1.0, 0.20 + self.audio_level * (0.55 + 0.12 * idx))
-                height = core_radius * (0.30 + 0.56 * motion)
-                x = cx + offset * (bar_w + gap) - bar_w / 2.0
-                y = cy - height / 2.0
-                Color(1, 1, 1, 0.76)
-                RoundedRectangle(
-                    pos=(x, y),
-                    size=(bar_w, height),
-                    radius=[bar_w / 2.0],
-                )
-
-            if self.state == "thinking":
-                # Small orbiting dots communicate computation without harsh motion.
-                for idx in range(3):
-                    angle = self.phase + idx * (2.0 * math.pi / 3.0)
-                    orbit = core_radius * 1.28
-                    dot = max(dp(2.2), core_radius * 0.075)
-                    ox = cx + math.cos(angle) * orbit
-                    oy = cy + math.sin(angle) * orbit
-                    Color(1, 1, 1, 0.58)
-                    Ellipse(pos=(ox - dot, oy - dot), size=(dot * 2, dot * 2))
+            Color(1, 1, 1, 0.22)
+            Line(
+                circle=(cx, cy, radius * 0.82),
+                width=1.2
+            )
 
 
 class ActionButton(Button):
-    """Button with a canvas-drawn icon; no emoji/font dependency."""
+    """Startup-safe button wrapper. Canvas icons are temporarily disabled."""
 
     def __init__(self, icon_kind="mic", **kwargs):
         self.icon_kind = icon_kind
         super().__init__(**kwargs)
-        self.bind(pos=self._draw_icon, size=self._draw_icon, disabled=self._draw_icon)
-        Clock.schedule_once(lambda dt: self._draw_icon(), 0)
-
-    def _draw_icon(self, *args):
-        self.canvas.after.clear()
-        if self.width <= 0 or self.height <= 0:
-            return
-
-        cx = self.right - dp(27)
-        cy = self.center_y
-        alpha = 0.38 if self.disabled else 0.92
-
-        with self.canvas.after:
-            Color(1, 1, 1, alpha)
-            if self.icon_kind == "clear":
-                # Minimal trash icon.
-                w = dp(14)
-                h = dp(17)
-                Line(rectangle=(cx - w / 2, cy - h / 2 - dp(1), w, h), width=1.45)
-                Line(points=(cx - w * 0.62, cy + h * 0.58, cx + w * 0.62, cy + h * 0.58), width=1.45)
-                Line(points=(cx - dp(4), cy + h * 0.72, cx + dp(4), cy + h * 0.72), width=1.45)
-                Line(points=(cx - dp(3), cy - dp(5), cx - dp(3), cy + dp(5)), width=1.1)
-                Line(points=(cx + dp(3), cy - dp(5), cx + dp(3), cy + dp(5)), width=1.1)
-            else:
-                # Microphone icon.
-                r = dp(6)
-                Line(ellipse=(cx - r, cy - dp(8), r * 2, dp(18)), width=1.55)
-                Line(circle=(cx, cy - dp(1), dp(10), 205, 335), width=1.55)
-                Line(points=(cx, cy - dp(11), cx, cy - dp(16)), width=1.55)
-                Line(points=(cx - dp(5), cy - dp(16), cx + dp(5), cy - dp(16)), width=1.55)
 
 
 class ChatMessageRow(FloatLayout):
