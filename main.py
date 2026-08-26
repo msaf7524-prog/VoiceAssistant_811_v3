@@ -27,10 +27,10 @@ from ai_client import AIClient
 
 
 # =========================================================
-# VERSION
+# VERSION 0.3.1
 # =========================================================
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 
 # =========================================================
@@ -479,6 +479,346 @@ class StatusOrb(Widget):
 
 
 # =========================================================
+# CHAT MESSAGE ROW
+# =========================================================
+
+class ChatMessageRow(FloatLayout):
+    """One independently rendered conversation message."""
+
+    def __init__(
+        self,
+        app_ref,
+        text,
+        role="assistant",
+        **kwargs
+    ):
+        super().__init__(
+            size_hint_y=None,
+            height=dp(70),
+            **kwargs
+        )
+
+        self.app_ref = app_ref
+        self.role = (
+            role
+            if role in (
+                "user",
+                "assistant",
+                "system"
+            )
+            else "assistant"
+        )
+        self.raw_text = clean_unicode(text)
+        self._render_event = None
+
+        if self.role == "user":
+            width_hint = 0.84
+            position_hint = {
+                "right": 0.98,
+                "top": 1
+            }
+            background_color = (
+                0.035,
+                0.26,
+                0.48,
+                1.0
+            )
+            self.text_color = (
+                0.97,
+                0.985,
+                1.0,
+                1.0
+            )
+            self.native_text_rgb = (
+                247,
+                251,
+                255
+            )
+        elif self.role == "system":
+            width_hint = 0.90
+            position_hint = {
+                "x": 0.02,
+                "top": 1
+            }
+            background_color = (
+                0.22,
+                0.14,
+                0.035,
+                1.0
+            )
+            self.text_color = (
+                1.0,
+                0.86,
+                0.58,
+                1.0
+            )
+            self.native_text_rgb = (
+                255,
+                222,
+                158
+            )
+        else:
+            width_hint = 0.90
+            position_hint = {
+                "x": 0.02,
+                "top": 1
+            }
+            background_color = (
+                0.07,
+                0.085,
+                0.12,
+                1.0
+            )
+            self.text_color = (
+                0.88,
+                0.91,
+                0.96,
+                1.0
+            )
+            self.native_text_rgb = (
+                224,
+                232,
+                245
+            )
+
+        self.bubble = FloatLayout(
+            size_hint=(
+                width_hint,
+                None
+            ),
+            height=dp(66),
+            pos_hint=position_hint
+        )
+
+        with self.bubble.canvas.before:
+            Color(*background_color)
+            self.background_shape = RoundedRectangle(
+                pos=self.bubble.pos,
+                size=self.bubble.size,
+                radius=[dp(16)]
+            )
+
+        self.bubble.bind(
+            pos=self._sync_background,
+            size=self._sync_background,
+            width=self._schedule_render
+        )
+
+        self.fallback_label = Label(
+            text=fix_text(
+                self._display_text(),
+                wrap_at=26
+            ),
+            font_name=self.app_ref.arabic_font,
+            font_size="16sp",
+            color=self.text_color,
+            size_hint=(1, None),
+            height=self.bubble.height,
+            pos_hint={"top": 1},
+            halign="right",
+            valign="top",
+            padding=(
+                dp(12),
+                dp(14)
+            ),
+            markup=False
+        )
+
+        self.message_image = Image(
+            size_hint=(1, None),
+            height=self.bubble.height,
+            pos_hint={"top": 1},
+            allow_stretch=True,
+            keep_ratio=False,
+            opacity=0
+        )
+
+        self.bubble.add_widget(
+            self.fallback_label
+        )
+        self.bubble.add_widget(
+            self.message_image
+        )
+        self.add_widget(
+            self.bubble
+        )
+
+        self.fallback_label.bind(
+            width=self._update_fallback_width,
+            texture_size=self._update_fallback_height
+        )
+
+        Clock.schedule_once(
+            lambda dt:
+            self._render_native(),
+            0.08
+        )
+
+    def _display_text(self):
+        if self.role == "user":
+            prefix = "أنت:"
+        elif self.role == "system":
+            prefix = "تنبيه:"
+        else:
+            prefix = "811:"
+
+        return (
+            prefix
+            + "\n"
+            + self.raw_text
+        ).strip()
+
+    def update_text(self, text):
+        self.raw_text = clean_unicode(text)
+        self.fallback_label.text = fix_text(
+            self._display_text(),
+            wrap_at=26
+        )
+        self._schedule_render()
+
+    def cancel_render(self):
+        if self._render_event is not None:
+            try:
+                self._render_event.cancel()
+            except Exception:
+                pass
+        self._render_event = None
+
+    def _sync_background(self, *args):
+        self.background_shape.pos = self.bubble.pos
+        self.background_shape.size = self.bubble.size
+
+    def _update_fallback_width(
+        self,
+        instance,
+        width
+    ):
+        instance.text_size = (
+            max(
+                dp(70),
+                width - dp(24)
+            ),
+            None
+        )
+
+    def _update_fallback_height(
+        self,
+        instance,
+        texture_size
+    ):
+        if self.message_image.opacity > 0:
+            return
+
+        self._apply_height(
+            texture_size[1] + dp(24)
+        )
+
+    def _apply_height(self, content_height):
+        height = max(
+            dp(66),
+            float(content_height)
+        )
+
+        self.bubble.height = height
+        self.fallback_label.height = height
+        self.message_image.height = height
+        self.height = height + dp(3)
+
+    def _schedule_render(self, *args):
+        self.cancel_render()
+        self._render_event = Clock.schedule_once(
+            lambda dt:
+            self._render_native(),
+            0.08
+        )
+
+    def _render_native(self):
+        self._render_event = None
+
+        if (
+            platform != "android"
+            or self.app_ref._native_chat_failed
+        ):
+            self.show_fallback()
+            return
+
+        width = int(
+            max(
+                2,
+                self.bubble.width
+            )
+        )
+
+        if width <= 2:
+            self._schedule_render()
+            return
+
+        try:
+            png_bytes, bitmap_height = (
+                self.app_ref
+                ._render_android_text_to_png(
+                    self._display_text(),
+                    width,
+                    text_rgb=self.native_text_rgb
+                )
+            )
+
+            if not png_bytes:
+                raise RuntimeError(
+                    "Android chat message renderer returned empty image"
+                )
+
+            core_image = CoreImage(
+                BytesIO(png_bytes),
+                ext="png"
+            )
+            texture = core_image.texture
+
+            if texture is None:
+                raise RuntimeError(
+                    "Kivy could not create the chat message texture"
+                )
+
+            self.message_image.texture = texture
+            self._apply_height(bitmap_height)
+            self.message_image.opacity = 1
+            self.fallback_label.opacity = 0
+
+            Clock.schedule_once(
+                self.app_ref._scroll_chat_to_bottom,
+                0
+            )
+
+            print(
+                "811: Chat message rendered:",
+                self.role,
+                width,
+                "x",
+                bitmap_height
+            )
+
+        except Exception as exc:
+            self.app_ref._native_chat_failed = True
+            print(
+                "811: Native chat message renderer failed:",
+                repr(exc)
+            )
+            self.app_ref._show_all_chat_fallback()
+
+    def show_fallback(self):
+        self.fallback_label.text = fix_text(
+            self._display_text(),
+            wrap_at=26
+        )
+        self.message_image.opacity = 0
+        self.fallback_label.opacity = 1
+        self._apply_height(
+            self.fallback_label.texture_size[1]
+            + dp(24)
+        )
+
+
+# =========================================================
 # MAIN APP
 # =========================================================
 
@@ -553,16 +893,16 @@ class VoiceAssistantApp(App):
         self.arabic_font = ARABIC_FONT
 
         # -------------------------
-        # Chat logical text
+        # Conversation messages
         # -------------------------
 
-        self._chat_raw_text = (
+        self._initial_chat_text = (
             "مرحباً\n"
             "أنا 811\n"
             "جاهز للعمل معك."
         )
-        self._chat_render_serial = 0
-        self._chat_render_event = None
+        self._chat_rows = []
+        self._active_user_row = None
         self._native_chat_failed = False
 
         request_android_permissions()
@@ -810,72 +1150,31 @@ class VoiceAssistantApp(App):
             ]
         )
 
-        self.chat_stack = FloatLayout(
+        self.chat_messages = BoxLayout(
+            orientation="vertical",
             size_hint_y=None,
-            height=dp(90)
-        )
-
-        # Kivy fallback remains underneath. It is shown only if the native
-        # Android renderer cannot produce a bitmap on this device.
-        self.output_label = Label(
-            text=fix_text(
-                self._chat_raw_text,
-                wrap_at=OUTPUT_ARABIC_WRAP_CHARS
-            ),
-            font_name=self.arabic_font,
-            font_size="17sp",
-            color=(
-                0.88,
-                0.90,
-                0.95,
-                1.0
-            ),
-            size_hint=(1, None),
-            height=self.chat_stack.height,
-            pos_hint={"top": 1},
-            halign="right",
-            valign="top",
+            spacing=dp(8),
             padding=(
-                dp(12),
-                dp(18)
-            ),
-            markup=False
+                0,
+                dp(6),
+                0,
+                dp(6)
+            )
         )
 
-        self.chat_image = Image(
-            size_hint=(1, None),
-            height=self.chat_stack.height,
-            pos_hint={"top": 1},
-            allow_stretch=True,
-            keep_ratio=False,
-            opacity=0
-        )
-
-        self.chat_stack.add_widget(
-            self.output_label
-        )
-        self.chat_stack.add_widget(
-            self.chat_image
-        )
-
-        self.output_label.bind(
-            width=self._update_output_width
-        )
-
-        self.output_label.bind(
-            texture_size=self._update_output_height
-        )
-
-        self.chat_stack.bind(
-            width=self._schedule_chat_rerender
+        self.chat_messages.bind(
+            minimum_height=
+            self.chat_messages.setter(
+                "height"
+            )
         )
 
         self.scroll.add_widget(
-            self.chat_stack
+            self.chat_messages
         )
 
-        # Start Arabic conversations from the top of the panel.
-        self.scroll.scroll_y = 1
+        # New conversation messages appear at the bottom.
+        self.scroll.scroll_y = 0
 
         chat_panel.add_widget(
             self.scroll
@@ -1006,10 +1305,13 @@ class VoiceAssistantApp(App):
             "ready"
         )
 
-        # Render the initial chat after Kivy has measured the panel width.
+        # Create the initial assistant message after Kivy measures the panel.
         Clock.schedule_once(
             lambda dt:
-            self._render_chat_text(),
+            self._set_chat_text(
+                self._initial_chat_text,
+                role="assistant"
+            ),
             0.20
         )
 
@@ -1031,162 +1333,18 @@ class VoiceAssistantApp(App):
         return root
 
     # =====================================================
-    # UI SIZING
-    # =====================================================
-
-    def _update_output_width(
-        self,
-        instance,
-        width
-    ):
-        instance.text_size = (
-            max(
-                dp(80),
-                width - dp(24)
-            ),
-            None
-        )
-
-    def _update_output_height(
-        self,
-        instance,
-        texture_size
-    ):
-        if self.chat_image.opacity > 0:
-            return
-
-        height = max(
-            dp(90),
-            texture_size[1] + dp(20)
-        )
-
-        self.chat_stack.height = height
-        self.output_label.height = height
-        self.chat_image.height = height
-
-    # =====================================================
     # NATIVE ANDROID ARABIC RENDERER
     # =====================================================
-
-    def _schedule_chat_rerender(
-        self,
-        *args
-    ):
-        if not hasattr(self, "chat_stack"):
-            return
-
-        if self._chat_render_event is not None:
-            try:
-                self._chat_render_event.cancel()
-            except Exception:
-                pass
-
-        self._chat_render_event = Clock.schedule_once(
-            lambda dt:
-            self._render_chat_text(),
-            0.08
-        )
-
-    def _render_chat_text(
-        self
-    ):
-        """Render logical Arabic through Android StaticLayout into a Kivy texture."""
-        self._chat_render_event = None
-
-        if not hasattr(self, "chat_stack"):
-            return
-
-        if platform != "android" or self._native_chat_failed:
-            self._show_kivy_chat_fallback()
-            return
-
-        width = int(
-            max(
-                2,
-                self.chat_stack.width
-            )
-        )
-
-        if width <= 2:
-            self._schedule_chat_rerender()
-            return
-
-        self._chat_render_serial += 1
-        render_serial = self._chat_render_serial
-        logical_text = self._chat_raw_text
-
-        try:
-            png_bytes, bitmap_height = (
-                self._render_android_text_to_png(
-                    logical_text,
-                    width
-                )
-            )
-
-            if render_serial != self._chat_render_serial:
-                return
-
-            if not png_bytes:
-                raise RuntimeError(
-                    "Android Arabic renderer returned empty image"
-                )
-
-            core_image = CoreImage(
-                BytesIO(png_bytes),
-                ext="png"
-            )
-
-            texture = core_image.texture
-
-            if texture is None:
-                raise RuntimeError(
-                    "Kivy could not create texture from Android Arabic bitmap"
-                )
-
-            self.chat_image.texture = texture
-            self.chat_image.height = max(
-                dp(90),
-                float(bitmap_height)
-            )
-            self.chat_stack.height = self.chat_image.height
-            self.output_label.height = self.chat_stack.height
-
-            # Native text is now only pixels inside Kivy. There is no Android
-            # View above the interface, so buttons and gestures stay untouched.
-            self.chat_image.opacity = 1
-            self.output_label.opacity = 0
-
-            Clock.schedule_once(
-                lambda dt:
-                setattr(
-                    self.scroll,
-                    "scroll_y",
-                    1
-                ),
-                0
-            )
-
-            print(
-                "811: Native Android Arabic bitmap rendered:",
-                width,
-                "x",
-                bitmap_height
-            )
-
-        except Exception as exc:
-            self._native_chat_failed = True
-
-            print(
-                "811: Native Android Arabic bitmap renderer failed:",
-                repr(exc)
-            )
-
-            self._show_kivy_chat_fallback()
 
     def _render_android_text_to_png(
         self,
         text,
-        bitmap_width
+        bitmap_width,
+        text_rgb=(
+            224,
+            230,
+            242
+        )
     ):
         """Use Android's shaping engine (StaticLayout) without creating a View."""
         from jnius import (
@@ -1285,9 +1443,9 @@ class VoiceAssistantApp(App):
         paint = TextPaint(flags)
         paint.setColor(
             AndroidColor.rgb(
-                224,
-                230,
-                242
+                int(text_rgb[0]),
+                int(text_rgb[1]),
+                int(text_rgb[2])
             )
         )
         paint.setTextSize(
@@ -1416,73 +1574,138 @@ class VoiceAssistantApp(App):
 
         return png_bytes, bitmap_height
 
-    def _show_kivy_chat_fallback(
+    # =====================================================
+    # CONVERSATION MESSAGES
+    # =====================================================
+
+    def _scroll_chat_to_bottom(
+        self,
+        *args
+    ):
+        if hasattr(self, "scroll"):
+            self.scroll.scroll_y = 0
+
+    def _show_all_chat_fallback(
         self
     ):
-        self.output_label.text = fix_text(
-            self._chat_raw_text,
-            wrap_at=OUTPUT_ARABIC_WRAP_CHARS
-        )
-
-        self.chat_image.opacity = 0
-        self.output_label.opacity = 1
+        for row in list(self._chat_rows):
+            row.show_fallback()
 
         Clock.schedule_once(
-            lambda dt:
-            setattr(
-                self.scroll,
-                "scroll_y",
-                1
-            ),
+            self._scroll_chat_to_bottom,
             0
         )
 
-    # =====================================================
-    # CHAT TEXT
-    # =====================================================
+    def _clear_chat_messages(
+        self
+    ):
+        for row in list(self._chat_rows):
+            row.cancel_render()
+
+        self._chat_rows = []
+        self._active_user_row = None
+
+        if hasattr(self, "chat_messages"):
+            self.chat_messages.clear_widgets()
+
+    def _add_chat_message(
+        self,
+        text,
+        role="assistant"
+    ):
+        text = clean_unicode(text)
+
+        if not text:
+            return None
+
+        row = ChatMessageRow(
+            app_ref=self,
+            text=text,
+            role=role
+        )
+
+        self._chat_rows.append(row)
+        self.chat_messages.add_widget(row)
+
+        Clock.schedule_once(
+            self._scroll_chat_to_bottom,
+            0.05
+        )
+
+        return row
 
     def _set_chat_text(
         self,
-        text
+        text,
+        role="assistant"
     ):
-        """Store logical text and render it with Android's Arabic shaping engine."""
-        self._chat_raw_text = clean_unicode(
-            text
+        """Reset the conversation to one independently rendered message."""
+        self._clear_chat_messages()
+        return self._add_chat_message(
+            text,
+            role=role
         )
-
-        # Update the hidden fallback immediately, then replace it with the
-        # native Android-rendered bitmap on the next frame.
-        self.output_label.text = fix_text(
-            self._chat_raw_text,
-            wrap_at=OUTPUT_ARABIC_WRAP_CHARS
-        )
-
-        self._schedule_chat_rerender()
 
     def _append_chat_text(
         self,
-        text
+        text,
+        role="assistant"
     ):
-        extra = clean_unicode(
-            text
+        return self._add_chat_message(
+            text,
+            role=role
         )
 
-        if not extra:
+    def _update_user_draft(
+        self,
+        text
+    ):
+        text = clean_unicode(text)
+
+        if not text:
             return
 
-        current = self._chat_raw_text.strip()
-
-        if current:
-            combined = (
-                current
-                + "\n\n"
-                + extra
+        if self._active_user_row is None:
+            self._active_user_row = (
+                self._add_chat_message(
+                    text,
+                    role="user"
+                )
             )
         else:
-            combined = extra
+            self._active_user_row.update_text(
+                text
+            )
 
-        self._set_chat_text(
-            combined
+        Clock.schedule_once(
+            self._scroll_chat_to_bottom,
+            0
+        )
+
+    def _commit_user_message(
+        self,
+        text
+    ):
+        text = clean_unicode(text)
+
+        if not text:
+            return
+
+        if self._active_user_row is None:
+            self._add_chat_message(
+                text,
+                role="user"
+            )
+        else:
+            self._active_user_row.update_text(
+                text
+            )
+
+        self._active_user_row = None
+
+        Clock.schedule_once(
+            self._scroll_chat_to_bottom,
+            0
         )
 
     # =====================================================
@@ -1559,9 +1782,13 @@ class VoiceAssistantApp(App):
             state
         )
 
-        if message is not None:
-            self._set_chat_text(
-                message
+        # Listening and thinking details already appear in the status area.
+        # Only durable errors become conversation messages, so the chat stays
+        # clean and preserves the real user/assistant exchange.
+        if message is not None and state == "error":
+            self._append_chat_text(
+                message,
+                role="system"
             )
 
         if state == "listening":
@@ -2356,7 +2583,8 @@ class VoiceAssistantApp(App):
 
         self._append_chat_text(
             "تشخيص الصوت:\n"
-            + details
+            + details,
+            role="system"
         )
 
     # =====================================================
@@ -2817,6 +3045,7 @@ class VoiceAssistantApp(App):
             return
 
         self.speech_recovery_attempts = 0
+        self._active_user_row = None
 
         self._run_on_android_ui(
             self._start_listening_on_ui
@@ -3054,10 +3283,7 @@ class VoiceAssistantApp(App):
     ):
         if not self.processing:
             self.set_state(
-                "listening",
-                "تحدث الآن...\n"
-                "اللغة: "
-                + self._speech_language_label()
+                "listening"
             )
 
     @mainthread
@@ -3065,8 +3291,7 @@ class VoiceAssistantApp(App):
         self
     ):
         self.set_state(
-            "listening",
-            "أستمع إليك..."
+            "listening"
         )
 
     @mainthread
@@ -3075,8 +3300,7 @@ class VoiceAssistantApp(App):
     ):
         if self.is_listening:
             self.set_state(
-                "thinking",
-                "جاري فهم كلامك..."
+                "thinking"
             )
 
     @mainthread
@@ -3089,9 +3313,8 @@ class VoiceAssistantApp(App):
         )
 
         if text:
-            self._set_chat_text(
-                "أنت:\n"
-                + text
+            self._update_user_draft(
+                text
             )
 
     @mainthread
@@ -3122,6 +3345,10 @@ class VoiceAssistantApp(App):
             )
             return
 
+        self._commit_user_message(
+            text
+        )
+
         groq_key = (
             self.key_input
             .text
@@ -3144,11 +3371,7 @@ class VoiceAssistantApp(App):
         request_serial = self._request_serial
 
         self.set_state(
-            "thinking",
-            "أنت:\n"
-            + text
-            + "\n\n"
-            + "جاري التفكير..."
+            "thinking"
         )
 
         threading.Thread(
@@ -3517,17 +3740,13 @@ class VoiceAssistantApp(App):
         self.processing = False
         self.speak_btn.disabled = False
 
-        message = (
-            "أنت:\n"
-            + user_text
-            + "\n\n"
-            + "811:\n"
-            + response
+        self._append_chat_text(
+            response,
+            role="assistant"
         )
 
         self.set_state(
-            "speaking",
-            message
+            "speaking"
         )
 
         self.speak(
@@ -3604,7 +3823,8 @@ class VoiceAssistantApp(App):
         self._set_chat_text(
             "تم مسح الشاشة.\n"
             "أنا 811.\n"
-            "جاهز."
+            "جاهز.",
+            role="assistant"
         )
 
         if self.ai_engine is not None:
