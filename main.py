@@ -26,7 +26,7 @@ from ai_client import AIClient
 # VERSION
 # =========================================================
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 
 
 # =========================================================
@@ -77,6 +77,11 @@ HIDDEN_UNICODE = (
     "\ufeff"
 )
 
+# Kivy wraps text after python-bidi has converted Arabic to visual order.
+# If a long visual RTL line is wrapped by Kivy, the resulting rows appear
+# bottom-to-top. Wrap the logical Arabic text first, then reshape every row.
+OUTPUT_ARABIC_WRAP_CHARS = 30
+
 
 def clean_unicode(text):
     if text is None:
@@ -109,16 +114,56 @@ def clean_unicode(text):
     return "\n".join(lines).strip()
 
 
-def fix_text(text):
-    """Prepare text for Kivy while preserving Arabic line order."""
+def _wrap_logical_line(line, max_chars):
+    """Wrap one logical line on words before applying the bidi transform."""
+    if not max_chars or len(line) <= max_chars:
+        return [line]
+
+    wrapped_lines = []
+    current_words = []
+
+    for word in line.split(" "):
+        candidate_words = current_words + [word]
+        candidate = " ".join(candidate_words)
+
+        if current_words and len(candidate) > max_chars:
+            wrapped_lines.append(" ".join(current_words))
+            current_words = [word]
+        else:
+            current_words = candidate_words
+
+    if current_words:
+        wrapped_lines.append(" ".join(current_words))
+
+    return wrapped_lines or [line]
+
+
+def fix_text(text, wrap_at=None):
+    """Prepare text for Kivy, wrapping logical Arabic before bidi shaping."""
     clean_text = clean_unicode(text)
 
     if not clean_text:
         return ""
 
-    display_lines = []
+    logical_lines = []
 
     for line in clean_text.split("\n"):
+        if (
+            wrap_at
+            and re.search(r"[\u0600-\u06FF]", line)
+        ):
+            logical_lines.extend(
+                _wrap_logical_line(
+                    line,
+                    wrap_at
+                )
+            )
+        else:
+            logical_lines.append(line)
+
+    display_lines = []
+
+    for line in logical_lines:
         if not line:
             display_lines.append("")
             continue
@@ -654,7 +699,8 @@ class VoiceAssistantApp(App):
             text=fix_text(
                 "مرحباً\n"
                 "أنا 811\n"
-                "جاهز للعمل معك."
+                "جاهز للعمل معك.",
+                wrap_at=OUTPUT_ARABIC_WRAP_CHARS
             ),
             font_name=self.arabic_font,
             font_size="17sp",
@@ -938,7 +984,8 @@ class VoiceAssistantApp(App):
 
         if message is not None:
             self.output_label.text = fix_text(
-                message
+                message,
+                wrap_at=OUTPUT_ARABIC_WRAP_CHARS
             )
 
             Clock.schedule_once(
@@ -1702,7 +1749,8 @@ class VoiceAssistantApp(App):
             + "\n\n"
             + fix_text(
                 "تشخيص الصوت:\n"
-                + details
+                + details,
+                wrap_at=OUTPUT_ARABIC_WRAP_CHARS
             )
         )
 
@@ -2403,7 +2451,8 @@ class VoiceAssistantApp(App):
         if text:
             self.output_label.text = fix_text(
                 "أنت:\n"
-                + text
+                + text,
+                wrap_at=OUTPUT_ARABIC_WRAP_CHARS
             )
 
     @mainthread
@@ -2874,7 +2923,8 @@ class VoiceAssistantApp(App):
         self.output_label.text = fix_text(
             "تم مسح الشاشة.\n"
             "أنا 811.\n"
-            "جاهز."
+            "جاهز.",
+            wrap_at=OUTPUT_ARABIC_WRAP_CHARS
         )
 
         if self.ai_engine is not None:
