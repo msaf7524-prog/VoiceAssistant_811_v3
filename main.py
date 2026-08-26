@@ -1,15 +1,19 @@
 import os
 import re
 import threading
+from io import BytesIO
 
 from kivy.app import App
 from kivy.clock import Clock, mainthread
 from kivy.core.text import LabelBase
+from kivy.core.image import Image as CoreImage
 from kivy.graphics import Color, Ellipse, RoundedRectangle, Line
 from kivy.metrics import dp
 from kivy.utils import platform
 
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.image import Image
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
@@ -26,7 +30,7 @@ from ai_client import AIClient
 # VERSION
 # =========================================================
 
-__version__ = "0.2.7"
+__version__ = "0.3.0"
 
 
 # =========================================================
@@ -557,6 +561,9 @@ class VoiceAssistantApp(App):
             "أنا 811\n"
             "جاهز للعمل معك."
         )
+        self._chat_render_serial = 0
+        self._chat_render_event = None
+        self._native_chat_failed = False
 
         request_android_permissions()
 
@@ -803,6 +810,13 @@ class VoiceAssistantApp(App):
             ]
         )
 
+        self.chat_stack = FloatLayout(
+            size_hint_y=None,
+            height=dp(90)
+        )
+
+        # Kivy fallback remains underneath. It is shown only if the native
+        # Android renderer cannot produce a bitmap on this device.
         self.output_label = Label(
             text=fix_text(
                 self._chat_raw_text,
@@ -816,7 +830,9 @@ class VoiceAssistantApp(App):
                 0.95,
                 1.0
             ),
-            size_hint_y=None,
+            size_hint=(1, None),
+            height=self.chat_stack.height,
+            pos_hint={"top": 1},
             halign="right",
             valign="top",
             padding=(
@@ -824,6 +840,22 @@ class VoiceAssistantApp(App):
                 dp(18)
             ),
             markup=False
+        )
+
+        self.chat_image = Image(
+            size_hint=(1, None),
+            height=self.chat_stack.height,
+            pos_hint={"top": 1},
+            allow_stretch=True,
+            keep_ratio=False,
+            opacity=0
+        )
+
+        self.chat_stack.add_widget(
+            self.output_label
+        )
+        self.chat_stack.add_widget(
+            self.chat_image
         )
 
         self.output_label.bind(
@@ -834,8 +866,12 @@ class VoiceAssistantApp(App):
             texture_size=self._update_output_height
         )
 
+        self.chat_stack.bind(
+            width=self._schedule_chat_rerender
+        )
+
         self.scroll.add_widget(
-            self.output_label
+            self.chat_stack
         )
 
         # Start Arabic conversations from the top of the panel.
@@ -970,6 +1006,13 @@ class VoiceAssistantApp(App):
             "ready"
         )
 
+        # Render the initial chat after Kivy has measured the panel width.
+        Clock.schedule_once(
+            lambda dt:
+            self._render_chat_text(),
+            0.20
+        )
+
         if platform == "android":
             Clock.schedule_once(
                 lambda dt:
@@ -1009,28 +1052,380 @@ class VoiceAssistantApp(App):
         instance,
         texture_size
     ):
-        instance.height = max(
+        if self.chat_image.opacity > 0:
+            return
+
+        height = max(
             dp(90),
             texture_size[1] + dp(20)
         )
 
+        self.chat_stack.height = height
+        self.output_label.height = height
+        self.chat_image.height = height
+
     # =====================================================
-    # CHAT TEXT
+    # NATIVE ANDROID ARABIC RENDERER
     # =====================================================
 
-    def _set_chat_text(
+    def _schedule_chat_rerender(
         self,
-        text
+        *args
     ):
-        """Update logical chat text and render it safely in Kivy."""
-        self._chat_raw_text = clean_unicode(
-            text
+        if not hasattr(self, "chat_stack"):
+            return
+
+        if self._chat_render_event is not None:
+            try:
+                self._chat_render_event.cancel()
+            except Exception:
+                pass
+
+        self._chat_render_event = Clock.schedule_once(
+            lambda dt:
+            self._render_chat_text(),
+            0.08
         )
 
+    def _render_chat_text(
+        self
+    ):
+        """Render logical Arabic through Android StaticLayout into a Kivy texture."""
+        self._chat_render_event = None
+
+        if not hasattr(self, "chat_stack"):
+            return
+
+        if platform != "android" or self._native_chat_failed:
+            self._show_kivy_chat_fallback()
+            return
+
+        width = int(
+            max(
+                2,
+                self.chat_stack.width
+            )
+        )
+
+        if width <= 2:
+            self._schedule_chat_rerender()
+            return
+
+        self._chat_render_serial += 1
+        render_serial = self._chat_render_serial
+        logical_text = self._chat_raw_text
+
+        try:
+            png_bytes, bitmap_height = (
+                self._render_android_text_to_png(
+                    logical_text,
+                    width
+                )
+            )
+
+            if render_serial != self._chat_render_serial:
+                return
+
+            if not png_bytes:
+                raise RuntimeError(
+                    "Android Arabic renderer returned empty image"
+                )
+
+            core_image = CoreImage(
+                BytesIO(png_bytes),
+                ext="png"
+            )
+
+            texture = core_image.texture
+
+            if texture is None:
+                raise RuntimeError(
+                    "Kivy could not create texture from Android Arabic bitmap"
+                )
+
+            self.chat_image.texture = texture
+            self.chat_image.height = max(
+                dp(90),
+                float(bitmap_height)
+            )
+            self.chat_stack.height = self.chat_image.height
+            self.output_label.height = self.chat_stack.height
+
+            # Native text is now only pixels inside Kivy. There is no Android
+            # View above the interface, so buttons and gestures stay untouched.
+            self.chat_image.opacity = 1
+            self.output_label.opacity = 0
+
+            Clock.schedule_once(
+                lambda dt:
+                setattr(
+                    self.scroll,
+                    "scroll_y",
+                    1
+                ),
+                0
+            )
+
+            print(
+                "811: Native Android Arabic bitmap rendered:",
+                width,
+                "x",
+                bitmap_height
+            )
+
+        except Exception as exc:
+            self._native_chat_failed = True
+
+            print(
+                "811: Native Android Arabic bitmap renderer failed:",
+                repr(exc)
+            )
+
+            self._show_kivy_chat_fallback()
+
+    def _render_android_text_to_png(
+        self,
+        text,
+        bitmap_width
+    ):
+        """Use Android's shaping engine (StaticLayout) without creating a View."""
+        from jnius import (
+            autoclass,
+            cast
+        )
+
+        PythonActivity = autoclass(
+            "org.kivy.android.PythonActivity"
+        )
+        TextPaint = autoclass(
+            "android.text.TextPaint"
+        )
+        Paint = autoclass(
+            "android.graphics.Paint"
+        )
+        StaticLayout = autoclass(
+            "android.text.StaticLayout"
+        )
+        StaticLayoutBuilder = autoclass(
+            "android.text.StaticLayout$Builder"
+        )
+        LayoutAlignment = autoclass(
+            "android.text.Layout$Alignment"
+        )
+        TextDirectionHeuristics = autoclass(
+            "android.text.TextDirectionHeuristics"
+        )
+        Bitmap = autoclass(
+            "android.graphics.Bitmap"
+        )
+        BitmapConfig = autoclass(
+            "android.graphics.Bitmap$Config"
+        )
+        BitmapCompressFormat = autoclass(
+            "android.graphics.Bitmap$CompressFormat"
+        )
+        Canvas = autoclass(
+            "android.graphics.Canvas"
+        )
+        AndroidColor = autoclass(
+            "android.graphics.Color"
+        )
+        Typeface = autoclass(
+            "android.graphics.Typeface"
+        )
+        ByteArrayOutputStream = autoclass(
+            "java.io.ByteArrayOutputStream"
+        )
+        JavaString = autoclass(
+            "java.lang.String"
+        )
+        BuildVersion = autoclass(
+            "android.os.Build$VERSION"
+        )
+
+        activity = PythonActivity.mActivity
+        if activity is None:
+            raise RuntimeError(
+                "Android Activity unavailable for text renderer"
+            )
+
+        metrics = (
+            activity.getResources()
+            .getDisplayMetrics()
+        )
+
+        density = float(metrics.density)
+        scaled_density = float(metrics.scaledDensity)
+
+        pad_h = int(
+            round(12.0 * density)
+        )
+        pad_v = int(
+            round(18.0 * density)
+        )
+
+        content_width = int(
+            max(
+                1,
+                bitmap_width - (pad_h * 2)
+            )
+        )
+
+        flags = int(
+            Paint.ANTI_ALIAS_FLAG
+        )
+
+        try:
+            flags |= int(
+                Paint.SUBPIXEL_TEXT_FLAG
+            )
+        except Exception:
+            pass
+
+        paint = TextPaint(flags)
+        paint.setColor(
+            AndroidColor.rgb(
+                224,
+                230,
+                242
+            )
+        )
+        paint.setTextSize(
+            17.0 * scaled_density
+        )
+        paint.setTypeface(
+            Typeface.create(
+                "sans-serif",
+                Typeface.NORMAL
+            )
+        )
+
+        java_text = JavaString(
+            clean_unicode(text)
+        )
+        char_sequence = cast(
+            "java.lang.CharSequence",
+            java_text
+        )
+
+        if int(BuildVersion.SDK_INT) >= 23:
+            builder = StaticLayoutBuilder.obtain(
+                char_sequence,
+                0,
+                java_text.length(),
+                paint,
+                content_width
+            )
+
+            builder.setAlignment(
+                LayoutAlignment.ALIGN_NORMAL
+            )
+            builder.setTextDirection(
+                TextDirectionHeuristics.FIRSTSTRONG_RTL
+            )
+            builder.setIncludePad(False)
+            builder.setLineSpacing(
+                0.0,
+                1.18
+            )
+
+            layout = builder.build()
+        else:
+            # API 21-22 compatibility. StaticLayout still uses Android's
+            # native bidi/shaping engine; the first strong Arabic character
+            # determines RTL paragraph direction on these versions.
+            layout = StaticLayout(
+                char_sequence,
+                paint,
+                content_width,
+                LayoutAlignment.ALIGN_NORMAL,
+                1.18,
+                0.0,
+                False
+            )
+
+        layout_height = int(
+            max(
+                1,
+                layout.getHeight()
+            )
+        )
+
+        bitmap_height = int(
+            max(
+                1,
+                layout_height + (pad_v * 2)
+            )
+        )
+
+        # Guard against accidental runaway memory usage from a malformed reply.
+        # Normal assistant replies are far below this limit.
+        max_height = 8192
+        if bitmap_height > max_height:
+            raise RuntimeError(
+                "Arabic response is too tall to render safely: "
+                + str(bitmap_height)
+            )
+
+        bitmap = Bitmap.createBitmap(
+            int(bitmap_width),
+            int(bitmap_height),
+            BitmapConfig.ARGB_8888
+        )
+        bitmap.eraseColor(
+            AndroidColor.TRANSPARENT
+        )
+
+        canvas = Canvas(bitmap)
+        canvas.translate(
+            float(pad_h),
+            float(pad_v)
+        )
+        layout.draw(canvas)
+
+        output = ByteArrayOutputStream()
+
+        try:
+            ok = bitmap.compress(
+                BitmapCompressFormat.PNG,
+                100,
+                output
+            )
+
+            if not ok:
+                raise RuntimeError(
+                    "Android Bitmap.compress returned false"
+                )
+
+            java_bytes = output.toByteArray()
+            png_bytes = bytes(
+                (int(value) & 0xFF)
+                for value in java_bytes
+            )
+
+        finally:
+            try:
+                output.close()
+            except Exception:
+                pass
+
+            try:
+                bitmap.recycle()
+            except Exception:
+                pass
+
+        return png_bytes, bitmap_height
+
+    def _show_kivy_chat_fallback(
+        self
+    ):
         self.output_label.text = fix_text(
             self._chat_raw_text,
             wrap_at=OUTPUT_ARABIC_WRAP_CHARS
         )
+
+        self.chat_image.opacity = 0
+        self.output_label.opacity = 1
 
         Clock.schedule_once(
             lambda dt:
@@ -1041,6 +1436,28 @@ class VoiceAssistantApp(App):
             ),
             0
         )
+
+    # =====================================================
+    # CHAT TEXT
+    # =====================================================
+
+    def _set_chat_text(
+        self,
+        text
+    ):
+        """Store logical text and render it with Android's Arabic shaping engine."""
+        self._chat_raw_text = clean_unicode(
+            text
+        )
+
+        # Update the hidden fallback immediately, then replace it with the
+        # native Android-rendered bitmap on the next frame.
+        self.output_label.text = fix_text(
+            self._chat_raw_text,
+            wrap_at=OUTPUT_ARABIC_WRAP_CHARS
+        )
+
+        self._schedule_chat_rerender()
 
     def _append_chat_text(
         self,
