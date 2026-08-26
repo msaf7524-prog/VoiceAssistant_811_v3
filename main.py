@@ -1,13 +1,15 @@
 import os
 import re
+import math
 import threading
+import unicodedata
 from io import BytesIO
 
 from kivy.app import App
 from kivy.clock import Clock, mainthread
 from kivy.core.text import LabelBase
 from kivy.core.image import Image as CoreImage
-from kivy.graphics import Color, Ellipse, RoundedRectangle, Line
+from kivy.graphics import Color, Ellipse, RoundedRectangle, Line, Rectangle
 from kivy.metrics import dp
 from kivy.utils import platform
 
@@ -27,10 +29,10 @@ from ai_client import AIClient
 
 
 # =========================================================
-# VERSION 0.3.1
+# VERSION 0.3.2
 # =========================================================
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 
 # =========================================================
@@ -179,36 +181,99 @@ ARABIC_RESHAPER = arabic_reshaper.ArabicReshaper(
 )
 
 
+# List markers that were observed as empty-square glyphs on the target phone.
+# Convert them to an ASCII hyphen before Android/Kivy rendering.
+BULLET_LIKE = {
+    "\u2022",  # bullet
+    "\u2023",  # triangular bullet
+    "\u2043",  # hyphen bullet
+    "\u2219",  # bullet operator
+    "\u25aa",  # black small square
+    "\u25ab",  # white small square
+    "\u25cf",  # black circle
+    "\u25cb",  # white circle
+    "\u25e6",  # white bullet
+    "\u25a0",  # black square
+    "\u25a1",  # white square
+    "\u204c",
+    "\u204d",
+}
+
+# Characters that are invisible formatting/emoji selectors and can become
+# a tofu-square on some Android font stacks when forced through a bitmap.
+EXTRA_UNSAFE_CODEPOINTS = {
+    0xFFFC,  # OBJECT REPLACEMENT CHARACTER
+    0xFFFD,  # REPLACEMENT CHARACTER
+    0xFE0E,  # text variation selector
+    0xFE0F,  # emoji variation selector
+}
+
+
 def clean_unicode(text):
+    """Normalize chat text and remove/replace glyphs known to render as squares."""
     if text is None:
         return ""
 
-    text = str(text)
+    # NFC preserves Arabic letters/harakat while canonicalizing equivalent text.
+    text = unicodedata.normalize("NFC", str(text))
 
     for char in HIDDEN_UNICODE:
         text = text.replace(char, "")
 
     cleaned = []
+    removed = []
 
     for char in text:
         if char in ("\n", "\t"):
             cleaned.append(char)
             continue
 
-        if ord(char) < 32:
+        if char in BULLET_LIKE:
+            # A plain hyphen is supported by every Android/Kivy fallback font.
+            cleaned.append("-")
+            continue
+
+        codepoint = ord(char)
+
+        if (
+            codepoint in EXTRA_UNSAFE_CODEPOINTS
+            or 0xFE00 <= codepoint <= 0xFE0F
+            or 0xE0100 <= codepoint <= 0xE01EF
+        ):
+            removed.append(codepoint)
+            continue
+
+        category = unicodedata.category(char)
+
+        # Keep letters, Arabic marks, punctuation, numbers, symbols and emoji.
+        # Drop only control/format/surrogate/private/unassigned characters.
+        if category in ("Cc", "Cf", "Cs", "Co", "Cn"):
+            removed.append(codepoint)
             continue
 
         cleaned.append(char)
 
+    if removed:
+        unique = []
+        for cp in removed:
+            if cp not in unique:
+                unique.append(cp)
+        print(
+            "811: Unicode sanitizer removed:",
+            ", ".join("U+%04X" % cp for cp in unique[:16])
+        )
+
     text = "".join(cleaned)
+
+    # Normalize common list formatting after bullet replacement.
+    text = re.sub(r"(?m)^\s*-\s*", "- ", text)
+    text = re.sub(r"[ \t]+", " ", text)
 
     lines = []
     for line in text.splitlines():
-        line = re.sub(r"[ \t]+", " ", line).strip()
-        lines.append(line)
+        lines.append(line.strip())
 
     return "\n".join(lines).strip()
-
 
 def _wrap_logical_line(line, max_chars):
     """Wrap one logical line on words before applying the bidi transform."""
@@ -340,275 +405,225 @@ def request_android_permissions():
 # =========================================================
 
 class StatusOrb(Widget):
+    """Living state orb: breathes, ripples and reacts to microphone RMS."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-        self.status_color = (
-            0.13,
-            0.59,
-            0.95,
-            1.0
-        )
-
-        self.bind(
-            pos=self._redraw,
-            size=self._redraw
-        )
+        self.state = "ready"
+        self.status_color = (0.13, 0.59, 0.95, 1.0)
+        self.phase = 0.0
+        self.audio_level = 0.0
+        self.target_level = 0.0
+        self._anim_event = Clock.schedule_interval(self._animate, 1.0 / 30.0)
+        self.bind(pos=self._redraw, size=self._redraw)
 
     def set_state(self, state):
         colors = {
-            "ready": (
-                0.13,
-                0.59,
-                0.95,
-                1.0
-            ),
-            "listening": (
-                0.00,
-                0.78,
-                0.88,
-                1.0
-            ),
-            "thinking": (
-                1.00,
-                0.60,
-                0.08,
-                1.0
-            ),
-            "speaking": (
-                0.20,
-                0.80,
-                0.30,
-                1.0
-            ),
-            "error": (
-                0.92,
-                0.20,
-                0.22,
-                1.0
-            )
+            "ready": (0.13, 0.59, 0.95, 1.0),
+            "listening": (0.00, 0.78, 0.88, 1.0),
+            "thinking": (1.00, 0.60, 0.08, 1.0),
+            "speaking": (0.20, 0.80, 0.30, 1.0),
+            "error": (0.92, 0.20, 0.22, 1.0),
         }
+        self.state = state if state in colors else "ready"
+        self.status_color = colors[self.state]
+        if self.state != "listening":
+            self.target_level = 0.0
+        self._redraw()
 
-        self.status_color = colors.get(
-            state,
-            colors["ready"]
-        )
+    def set_level(self, rms_db):
+        """Feed Android SpeechRecognizer RMS into the orb (roughly -2..10 dB)."""
+        try:
+            value = (float(rms_db) + 2.0) / 12.0
+        except Exception:
+            value = 0.0
+        self.target_level = max(0.0, min(1.0, value))
 
+    def _animate(self, dt):
+        speed = {
+            "ready": 1.0,
+            "listening": 2.8,
+            "thinking": 3.6,
+            "speaking": 4.0,
+            "error": 5.0,
+        }.get(self.state, 1.0)
+        self.phase = (self.phase + dt * speed) % (math.pi * 2.0)
+        self.audio_level += (self.target_level - self.audio_level) * 0.24
+        if self.state != "listening":
+            self.audio_level *= 0.93
         self._redraw()
 
     def _redraw(self, *args):
         self.canvas.clear()
-
         if self.width <= 0 or self.height <= 0:
             return
 
+        cx = self.center_x
+        cy = self.center_y
+        base = min(self.width, self.height) * 0.205
+
+        if self.state == "listening":
+            energy = 0.12 + self.audio_level * 0.34
+        elif self.state == "speaking":
+            energy = 0.18 + 0.10 * (0.5 + 0.5 * math.sin(self.phase * 2.0))
+        elif self.state == "thinking":
+            energy = 0.13 + 0.07 * (0.5 + 0.5 * math.sin(self.phase * 1.7))
+        elif self.state == "error":
+            energy = 0.12 + 0.08 * abs(math.sin(self.phase * 2.0))
+        else:
+            energy = 0.08 + 0.035 * (0.5 + 0.5 * math.sin(self.phase))
+
         with self.canvas:
-            cx = self.center_x
-            cy = self.center_y
+            # Three travelling ripples give a calm "alive" feeling.
+            for idx in range(3):
+                wave = ((self.phase / (math.pi * 2.0)) + idx / 3.0) % 1.0
+                scale = 1.55 + wave * 1.95 + energy
+                alpha = max(0.0, (1.0 - wave) * (0.15 + energy * 0.23))
+                radius = base * scale
+                Color(
+                    self.status_color[0],
+                    self.status_color[1],
+                    self.status_color[2],
+                    alpha,
+                )
+                Line(circle=(cx, cy, radius), width=max(1.0, 2.1 - wave))
 
-            radius = min(
-                self.width,
-                self.height
-            ) * 0.22
-
+            glow_radius = base * (1.55 + energy * 0.9)
             Color(
                 self.status_color[0],
                 self.status_color[1],
                 self.status_color[2],
-                0.10
+                0.14 + energy * 0.18,
             )
-
             Ellipse(
-                pos=(
-                    cx - radius * 2.4,
-                    cy - radius * 2.4
-                ),
-                size=(
-                    radius * 4.8,
-                    radius * 4.8
-                )
+                pos=(cx - glow_radius, cy - glow_radius),
+                size=(glow_radius * 2.0, glow_radius * 2.0),
             )
 
-            Color(
-                self.status_color[0],
-                self.status_color[1],
-                self.status_color[2],
-                0.18
-            )
-
-            Ellipse(
-                pos=(
-                    cx - radius * 1.75,
-                    cy - radius * 1.75
-                ),
-                size=(
-                    radius * 3.5,
-                    radius * 3.5
-                )
-            )
-
+            core_radius = base * (1.0 + energy * 0.35)
             Color(*self.status_color)
-
             Ellipse(
-                pos=(
-                    cx - radius,
-                    cy - radius
-                ),
-                size=(
-                    radius * 2,
-                    radius * 2
+                pos=(cx - core_radius, cy - core_radius),
+                size=(core_radius * 2.0, core_radius * 2.0),
+            )
+
+            Color(1, 1, 1, 0.23)
+            Line(circle=(cx, cy, core_radius * 0.84), width=1.15)
+
+            # Five tiny equalizer bars inside the core. Listening uses real RMS;
+            # thinking/speaking use smooth procedural motion.
+            bar_w = max(dp(2), core_radius * 0.10)
+            gap = bar_w * 0.75
+            for idx in range(5):
+                offset = idx - 2
+                motion = 0.5 + 0.5 * math.sin(self.phase * 2.2 + idx * 0.95)
+                if self.state == "listening":
+                    motion = min(1.0, 0.20 + self.audio_level * (0.55 + 0.12 * idx))
+                height = core_radius * (0.30 + 0.56 * motion)
+                x = cx + offset * (bar_w + gap) - bar_w / 2.0
+                y = cy - height / 2.0
+                Color(1, 1, 1, 0.76)
+                RoundedRectangle(
+                    pos=(x, y),
+                    size=(bar_w, height),
+                    radius=[bar_w / 2.0],
                 )
-            )
 
-            Color(
-                1,
-                1,
-                1,
-                0.22
-            )
-
-            Line(
-                circle=(
-                    cx,
-                    cy,
-                    radius * 0.82
-                ),
-                width=1.2
-            )
+            if self.state == "thinking":
+                # Small orbiting dots communicate computation without harsh motion.
+                for idx in range(3):
+                    angle = self.phase + idx * (2.0 * math.pi / 3.0)
+                    orbit = core_radius * 1.28
+                    dot = max(dp(2.2), core_radius * 0.075)
+                    ox = cx + math.cos(angle) * orbit
+                    oy = cy + math.sin(angle) * orbit
+                    Color(1, 1, 1, 0.58)
+                    Ellipse(pos=(ox - dot, oy - dot), size=(dot * 2, dot * 2))
 
 
-# =========================================================
-# CHAT MESSAGE ROW
-# =========================================================
+class ActionButton(Button):
+    """Button with a canvas-drawn icon; no emoji/font dependency."""
+
+    def __init__(self, icon_kind="mic", **kwargs):
+        self.icon_kind = icon_kind
+        super().__init__(**kwargs)
+        self.bind(pos=self._draw_icon, size=self._draw_icon, disabled=self._draw_icon)
+        Clock.schedule_once(lambda dt: self._draw_icon(), 0)
+
+    def _draw_icon(self, *args):
+        self.canvas.after.clear()
+        if self.width <= 0 or self.height <= 0:
+            return
+
+        cx = self.right - dp(27)
+        cy = self.center_y
+        alpha = 0.38 if self.disabled else 0.92
+
+        with self.canvas.after:
+            Color(1, 1, 1, alpha)
+            if self.icon_kind == "clear":
+                # Minimal trash icon.
+                w = dp(14)
+                h = dp(17)
+                Line(rectangle=(cx - w / 2, cy - h / 2 - dp(1), w, h), width=1.45)
+                Line(points=(cx - w * 0.62, cy + h * 0.58, cx + w * 0.62, cy + h * 0.58), width=1.45)
+                Line(points=(cx - dp(4), cy + h * 0.72, cx + dp(4), cy + h * 0.72), width=1.45)
+                Line(points=(cx - dp(3), cy - dp(5), cx - dp(3), cy + dp(5)), width=1.1)
+                Line(points=(cx + dp(3), cy - dp(5), cx + dp(3), cy + dp(5)), width=1.1)
+            else:
+                # Microphone icon.
+                r = dp(6)
+                Line(ellipse=(cx - r, cy - dp(8), r * 2, dp(18)), width=1.55)
+                Line(circle=(cx, cy - dp(1), dp(10), 205, 335), width=1.55)
+                Line(points=(cx, cy - dp(11), cx, cy - dp(16)), width=1.55)
+                Line(points=(cx - dp(5), cy - dp(16), cx + dp(5), cy - dp(16)), width=1.55)
+
 
 class ChatMessageRow(FloatLayout):
-    """One independently rendered conversation message."""
+    """One independent user/assistant/system message bubble."""
 
-    def __init__(
-        self,
-        app_ref,
-        text,
-        role="assistant",
-        **kwargs
-    ):
-        super().__init__(
-            size_hint_y=None,
-            height=dp(70),
-            **kwargs
-        )
-
+    def __init__(self, app_ref, text, role="assistant", **kwargs):
+        super().__init__(size_hint_y=None, height=dp(70), **kwargs)
         self.app_ref = app_ref
-        self.role = (
-            role
-            if role in (
-                "user",
-                "assistant",
-                "system"
-            )
-            else "assistant"
-        )
+        self.role = role if role in ("user", "assistant", "system") else "assistant"
         self.raw_text = clean_unicode(text)
         self._render_event = None
 
         if self.role == "user":
             width_hint = 0.84
-            position_hint = {
-                "right": 0.98,
-                "top": 1
-            }
-            background_color = (
-                0.035,
-                0.26,
-                0.48,
-                1.0
-            )
-            self.text_color = (
-                0.97,
-                0.985,
-                1.0,
-                1.0
-            )
-            self.native_text_rgb = (
-                247,
-                251,
-                255
-            )
+            position_hint = {"right": 0.98, "top": 1}
+            background_color = (0.035, 0.26, 0.48, 1.0)
+            self.text_color = (0.97, 0.985, 1.0, 1.0)
+            self.native_text_rgb = (247, 251, 255)
         elif self.role == "system":
             width_hint = 0.90
-            position_hint = {
-                "x": 0.02,
-                "top": 1
-            }
-            background_color = (
-                0.22,
-                0.14,
-                0.035,
-                1.0
-            )
-            self.text_color = (
-                1.0,
-                0.86,
-                0.58,
-                1.0
-            )
-            self.native_text_rgb = (
-                255,
-                222,
-                158
-            )
+            position_hint = {"x": 0.02, "top": 1}
+            background_color = (0.22, 0.14, 0.035, 1.0)
+            self.text_color = (1.0, 0.86, 0.58, 1.0)
+            self.native_text_rgb = (255, 222, 158)
         else:
             width_hint = 0.90
-            position_hint = {
-                "x": 0.02,
-                "top": 1
-            }
-            background_color = (
-                0.07,
-                0.085,
-                0.12,
-                1.0
-            )
-            self.text_color = (
-                0.88,
-                0.91,
-                0.96,
-                1.0
-            )
-            self.native_text_rgb = (
-                224,
-                232,
-                245
-            )
+            position_hint = {"x": 0.02, "top": 1}
+            background_color = (0.07, 0.085, 0.12, 1.0)
+            self.text_color = (0.88, 0.91, 0.96, 1.0)
+            self.native_text_rgb = (224, 232, 245)
 
         self.bubble = FloatLayout(
-            size_hint=(
-                width_hint,
-                None
-            ),
+            size_hint=(width_hint, None),
             height=dp(66),
-            pos_hint=position_hint
+            pos_hint=position_hint,
         )
-
         with self.bubble.canvas.before:
             Color(*background_color)
             self.background_shape = RoundedRectangle(
                 pos=self.bubble.pos,
                 size=self.bubble.size,
-                radius=[dp(16)]
+                radius=[dp(16)],
             )
-
-        self.bubble.bind(
-            pos=self._sync_background,
-            size=self._sync_background,
-            width=self._schedule_render
-        )
+        self.bubble.bind(pos=self._sync_background, size=self._sync_background, width=self._schedule_render)
 
         self.fallback_label = Label(
-            text=fix_text(
-                self._display_text(),
-                wrap_at=26
-            ),
+            text=fix_text(self._display_text(), wrap_at=26),
             font_name=self.app_ref.arabic_font,
             font_size="16sp",
             color=self.text_color,
@@ -617,63 +632,30 @@ class ChatMessageRow(FloatLayout):
             pos_hint={"top": 1},
             halign="right",
             valign="top",
-            padding=(
-                dp(12),
-                dp(14)
-            ),
-            markup=False
+            padding=(dp(12), dp(14)),
+            markup=False,
         )
-
         self.message_image = Image(
             size_hint=(1, None),
             height=self.bubble.height,
             pos_hint={"top": 1},
             allow_stretch=True,
             keep_ratio=False,
-            opacity=0
+            opacity=0,
         )
-
-        self.bubble.add_widget(
-            self.fallback_label
-        )
-        self.bubble.add_widget(
-            self.message_image
-        )
-        self.add_widget(
-            self.bubble
-        )
-
-        self.fallback_label.bind(
-            width=self._update_fallback_width,
-            texture_size=self._update_fallback_height
-        )
-
-        Clock.schedule_once(
-            lambda dt:
-            self._render_native(),
-            0.08
-        )
+        self.bubble.add_widget(self.fallback_label)
+        self.bubble.add_widget(self.message_image)
+        self.add_widget(self.bubble)
+        self.fallback_label.bind(width=self._update_fallback_width, texture_size=self._update_fallback_height)
+        Clock.schedule_once(lambda dt: self._render_native(), 0.08)
 
     def _display_text(self):
-        if self.role == "user":
-            prefix = "أنت:"
-        elif self.role == "system":
-            prefix = "تنبيه:"
-        else:
-            prefix = "811:"
-
-        return (
-            prefix
-            + "\n"
-            + self.raw_text
-        ).strip()
+        prefix = "أنت:" if self.role == "user" else ("تنبيه:" if self.role == "system" else "811:")
+        return (prefix + "\n" + self.raw_text).strip()
 
     def update_text(self, text):
         self.raw_text = clean_unicode(text)
-        self.fallback_label.text = fix_text(
-            self._display_text(),
-            wrap_at=26
-        )
+        self.fallback_label.text = fix_text(self._display_text(), wrap_at=26)
         self._schedule_render()
 
     def cancel_render(self):
@@ -688,37 +670,15 @@ class ChatMessageRow(FloatLayout):
         self.background_shape.pos = self.bubble.pos
         self.background_shape.size = self.bubble.size
 
-    def _update_fallback_width(
-        self,
-        instance,
-        width
-    ):
-        instance.text_size = (
-            max(
-                dp(70),
-                width - dp(24)
-            ),
-            None
-        )
+    def _update_fallback_width(self, instance, width):
+        instance.text_size = (max(dp(70), width - dp(24)), None)
 
-    def _update_fallback_height(
-        self,
-        instance,
-        texture_size
-    ):
-        if self.message_image.opacity > 0:
-            return
-
-        self._apply_height(
-            texture_size[1] + dp(24)
-        )
+    def _update_fallback_height(self, instance, texture_size):
+        if self.message_image.opacity <= 0:
+            self._apply_height(texture_size[1] + dp(24))
 
     def _apply_height(self, content_height):
-        height = max(
-            dp(66),
-            float(content_height)
-        )
-
+        height = max(dp(66), float(content_height))
         self.bubble.height = height
         self.fallback_label.height = height
         self.message_image.height = height
@@ -726,96 +686,41 @@ class ChatMessageRow(FloatLayout):
 
     def _schedule_render(self, *args):
         self.cancel_render()
-        self._render_event = Clock.schedule_once(
-            lambda dt:
-            self._render_native(),
-            0.08
-        )
+        self._render_event = Clock.schedule_once(lambda dt: self._render_native(), 0.08)
 
     def _render_native(self):
         self._render_event = None
-
-        if (
-            platform != "android"
-            or self.app_ref._native_chat_failed
-        ):
+        if platform != "android" or self.app_ref._native_chat_failed:
             self.show_fallback()
             return
-
-        width = int(
-            max(
-                2,
-                self.bubble.width
-            )
-        )
-
+        width = int(max(2, self.bubble.width))
         if width <= 2:
             self._schedule_render()
             return
-
         try:
-            png_bytes, bitmap_height = (
-                self.app_ref
-                ._render_android_text_to_png(
-                    self._display_text(),
-                    width,
-                    text_rgb=self.native_text_rgb
-                )
+            png_bytes, bitmap_height = self.app_ref._render_android_text_to_png(
+                self._display_text(), width, text_rgb=self.native_text_rgb
             )
-
             if not png_bytes:
-                raise RuntimeError(
-                    "Android chat message renderer returned empty image"
-                )
-
-            core_image = CoreImage(
-                BytesIO(png_bytes),
-                ext="png"
-            )
-            texture = core_image.texture
-
+                raise RuntimeError("Android chat message renderer returned empty image")
+            texture = CoreImage(BytesIO(png_bytes), ext="png").texture
             if texture is None:
-                raise RuntimeError(
-                    "Kivy could not create the chat message texture"
-                )
-
+                raise RuntimeError("Kivy could not create chat message texture")
             self.message_image.texture = texture
             self._apply_height(bitmap_height)
             self.message_image.opacity = 1
             self.fallback_label.opacity = 0
-
-            Clock.schedule_once(
-                self.app_ref._scroll_chat_to_bottom,
-                0
-            )
-
-            print(
-                "811: Chat message rendered:",
-                self.role,
-                width,
-                "x",
-                bitmap_height
-            )
-
+            Clock.schedule_once(self.app_ref._scroll_chat_to_bottom, 0)
         except Exception as exc:
             self.app_ref._native_chat_failed = True
-            print(
-                "811: Native chat message renderer failed:",
-                repr(exc)
-            )
+            print("811: Native chat message renderer failed:", repr(exc))
             self.app_ref._show_all_chat_fallback()
 
     def show_fallback(self):
-        self.fallback_label.text = fix_text(
-            self._display_text(),
-            wrap_at=26
-        )
+        self.fallback_label.text = fix_text(self._display_text(), wrap_at=26)
         self.message_image.opacity = 0
         self.fallback_label.opacity = 1
-        self._apply_height(
-            self.fallback_label.texture_size[1]
-            + dp(24)
-        )
+        self._apply_height(self.fallback_label.texture_size[1] + dp(24))
 
 
 # =========================================================
@@ -1144,45 +1049,22 @@ class VoiceAssistantApp(App):
             do_scroll_x=False,
             do_scroll_y=True,
             bar_width=dp(4),
-            scroll_type=[
-                "bars",
-                "content"
-            ]
+            scroll_type=["bars", "content"]
         )
 
         self.chat_messages = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
             spacing=dp(8),
-            padding=(
-                0,
-                dp(6),
-                0,
-                dp(6)
-            )
+            padding=(0, dp(6), 0, dp(6))
         )
-
         self.chat_messages.bind(
-            minimum_height=
-            self.chat_messages.setter(
-                "height"
-            )
+            minimum_height=self.chat_messages.setter("height")
         )
-
-        self.scroll.add_widget(
-            self.chat_messages
-        )
-
-        # New conversation messages appear at the bottom.
+        self.scroll.add_widget(self.chat_messages)
         self.scroll.scroll_y = 0
-
-        chat_panel.add_widget(
-            self.scroll
-        )
-
-        main.add_widget(
-            chat_panel
-        )
+        chat_panel.add_widget(self.scroll)
+        main.add_widget(chat_panel)
 
         # =================================================
         # BUTTONS
@@ -1194,7 +1076,8 @@ class VoiceAssistantApp(App):
             spacing=dp(9)
         )
 
-        self.speak_btn = Button(
+        self.speak_btn = ActionButton(
+            icon_kind="mic",
             text=fix_text(
                 "اضغط للتحدث"
             ),
@@ -1221,7 +1104,8 @@ class VoiceAssistantApp(App):
             on_press=self.on_speak_click
         )
 
-        self.clear_btn = Button(
+        self.clear_btn = ActionButton(
+            icon_kind="clear",
             text=fix_text(
                 "مسح"
             ),
@@ -1267,7 +1151,7 @@ class VoiceAssistantApp(App):
             text=(
                 "Speech Recognition • "
                 "Native TTS • "
-                "Cairo Arabic • "
+                "Android Arabic • "
                 "Groq AI"
             ),
             font_name="Roboto",
@@ -1305,7 +1189,7 @@ class VoiceAssistantApp(App):
             "ready"
         )
 
-        # Create the initial assistant message after Kivy measures the panel.
+        # Create the initial assistant bubble after Kivy measures the panel.
         Clock.schedule_once(
             lambda dt:
             self._set_chat_text(
@@ -1340,11 +1224,7 @@ class VoiceAssistantApp(App):
         self,
         text,
         bitmap_width,
-        text_rgb=(
-            224,
-            230,
-            242
-        )
+        text_rgb=(224, 230, 242)
     ):
         """Use Android's shaping engine (StaticLayout) without creating a View."""
         from jnius import (
@@ -1578,135 +1458,60 @@ class VoiceAssistantApp(App):
     # CONVERSATION MESSAGES
     # =====================================================
 
-    def _scroll_chat_to_bottom(
-        self,
-        *args
-    ):
+    def _scroll_chat_to_bottom(self, *args):
         if hasattr(self, "scroll"):
             self.scroll.scroll_y = 0
 
-    def _show_all_chat_fallback(
-        self
-    ):
+    def _show_all_chat_fallback(self):
         for row in list(self._chat_rows):
             row.show_fallback()
+        Clock.schedule_once(self._scroll_chat_to_bottom, 0)
 
-        Clock.schedule_once(
-            self._scroll_chat_to_bottom,
-            0
-        )
-
-    def _clear_chat_messages(
-        self
-    ):
+    def _clear_chat_messages(self):
         for row in list(self._chat_rows):
             row.cancel_render()
-
         self._chat_rows = []
         self._active_user_row = None
-
         if hasattr(self, "chat_messages"):
             self.chat_messages.clear_widgets()
 
-    def _add_chat_message(
-        self,
-        text,
-        role="assistant"
-    ):
+    def _add_chat_message(self, text, role="assistant"):
         text = clean_unicode(text)
-
         if not text:
             return None
-
-        row = ChatMessageRow(
-            app_ref=self,
-            text=text,
-            role=role
-        )
-
+        row = ChatMessageRow(app_ref=self, text=text, role=role)
         self._chat_rows.append(row)
         self.chat_messages.add_widget(row)
-
-        Clock.schedule_once(
-            self._scroll_chat_to_bottom,
-            0.05
-        )
-
+        Clock.schedule_once(self._scroll_chat_to_bottom, 0.05)
         return row
 
-    def _set_chat_text(
-        self,
-        text,
-        role="assistant"
-    ):
-        """Reset the conversation to one independently rendered message."""
+    def _set_chat_text(self, text, role="assistant"):
         self._clear_chat_messages()
-        return self._add_chat_message(
-            text,
-            role=role
-        )
+        return self._add_chat_message(text, role=role)
 
-    def _append_chat_text(
-        self,
-        text,
-        role="assistant"
-    ):
-        return self._add_chat_message(
-            text,
-            role=role
-        )
+    def _append_chat_text(self, text, role="assistant"):
+        return self._add_chat_message(text, role=role)
 
-    def _update_user_draft(
-        self,
-        text
-    ):
+    def _update_user_draft(self, text):
         text = clean_unicode(text)
-
         if not text:
             return
-
         if self._active_user_row is None:
-            self._active_user_row = (
-                self._add_chat_message(
-                    text,
-                    role="user"
-                )
-            )
+            self._active_user_row = self._add_chat_message(text, role="user")
         else:
-            self._active_user_row.update_text(
-                text
-            )
+            self._active_user_row.update_text(text)
+        Clock.schedule_once(self._scroll_chat_to_bottom, 0)
 
-        Clock.schedule_once(
-            self._scroll_chat_to_bottom,
-            0
-        )
-
-    def _commit_user_message(
-        self,
-        text
-    ):
+    def _commit_user_message(self, text):
         text = clean_unicode(text)
-
         if not text:
             return
-
         if self._active_user_row is None:
-            self._add_chat_message(
-                text,
-                role="user"
-            )
+            self._add_chat_message(text, role="user")
         else:
-            self._active_user_row.update_text(
-                text
-            )
-
+            self._active_user_row.update_text(text)
         self._active_user_row = None
-
-        Clock.schedule_once(
-            self._scroll_chat_to_bottom,
-            0
-        )
+        Clock.schedule_once(self._scroll_chat_to_bottom, 0)
 
     # =====================================================
     # STATES
@@ -1782,9 +1587,8 @@ class VoiceAssistantApp(App):
             state
         )
 
-        # Listening and thinking details already appear in the status area.
-        # Only durable errors become conversation messages, so the chat stays
-        # clean and preserves the real user/assistant exchange.
+        # Keep chat clean: transient listening/thinking details stay in the
+        # status area; durable errors become a system bubble.
         if message is not None and state == "error":
             self._append_chat_text(
                 message,
@@ -2858,7 +2662,7 @@ class VoiceAssistantApp(App):
                     self,
                     rmsdB
                 ):
-                    pass
+                    outer.on_speech_rms(float(rmsdB))
 
                 @java_method(
                     "([B)V"
@@ -3278,110 +3082,62 @@ class VoiceAssistantApp(App):
     # =====================================================
 
     @mainthread
-    def on_speech_ready(
-        self
-    ):
+    def on_speech_rms(self, rms_db):
+        if hasattr(self, "status_orb"):
+            self.status_orb.set_level(rms_db)
+
+    @mainthread
+    def on_speech_ready(self):
         if not self.processing:
-            self.set_state(
-                "listening"
-            )
+            self.set_state("listening")
 
     @mainthread
-    def on_speech_begin(
-        self
-    ):
-        self.set_state(
-            "listening"
-        )
+    def on_speech_begin(self):
+        self.set_state("listening")
 
     @mainthread
-    def on_speech_end(
-        self
-    ):
+    def on_speech_end(self):
         if self.is_listening:
-            self.set_state(
-                "thinking"
-            )
+            self.set_state("thinking")
 
     @mainthread
-    def on_speech_partial_text(
-        self,
-        text
-    ):
-        text = clean_unicode(
-            text
-        )
-
+    def on_speech_partial_text(self, text):
+        text = clean_unicode(text)
         if text:
-            self._update_user_draft(
-                text
-            )
+            self._update_user_draft(text)
 
     @mainthread
-    def on_speech_results_text(
-        self,
-        text
-    ):
+    def on_speech_results_text(self, text):
         self.is_listening = False
         self.speech_recovery_attempts = 0
-
-        text = clean_unicode(
-            text
-        )
+        text = clean_unicode(text)
 
         if not text:
             self.processing = False
             self.speak_btn.disabled = False
-
-            self.set_state(
-                "error",
-                "لم أتمكن من فهم الكلام."
-            )
-
-            Clock.schedule_once(
-                lambda dt:
-                self._return_to_ready(),
-                2.0
-            )
+            self.set_state("error", "لم أتمكن من فهم الكلام.")
+            Clock.schedule_once(lambda dt: self._return_to_ready(), 2.0)
             return
 
-        self._commit_user_message(
-            text
-        )
+        self._commit_user_message(text)
 
-        groq_key = (
-            self.key_input
-            .text
-            .strip()
-        )
-
+        groq_key = self.key_input.text.strip()
         if not groq_key:
             self.processing = False
             self.speak_btn.disabled = False
-
-            self.set_state(
-                "error",
-                "أدخل مفتاح Groq أولاً."
-            )
+            self.set_state("error", "أدخل مفتاح Groq أولاً.")
             return
 
         self.processing = True
         self.speak_btn.disabled = True
         self._request_serial += 1
         request_serial = self._request_serial
-
-        self.set_state(
-            "thinking"
-        )
+        self.set_state("thinking")
 
         threading.Thread(
             target=self.process_user_text,
-            args=(
-                text,
-                groq_key,
-                request_serial
-            ),
-            daemon=True
+            args=(text, groq_key, request_serial),
+            daemon=True,
         ).start()
 
     @mainthread
@@ -3740,20 +3496,10 @@ class VoiceAssistantApp(App):
         self.processing = False
         self.speak_btn.disabled = False
 
-        self._append_chat_text(
-            response,
-            role="assistant"
-        )
-
-        self.set_state(
-            "speaking"
-        )
-
-        self.speak(
-            clean_for_speech(
-                response
-            )
-        )
+        response = clean_unicode(response)
+        self._append_chat_text(response, role="assistant")
+        self.set_state("speaking")
+        self.speak(clean_for_speech(response))
 
         # The TTS watcher returns the UI to ready when playback ends.
 
