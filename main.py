@@ -5,7 +5,6 @@ import threading
 from kivy.app import App
 from kivy.clock import Clock, mainthread
 from kivy.core.text import LabelBase
-from kivy.core.window import Window
 from kivy.graphics import Color, Ellipse, RoundedRectangle, Line
 from kivy.metrics import dp
 from kivy.utils import platform
@@ -27,7 +26,7 @@ from ai_client import AIClient
 # VERSION
 # =========================================================
 
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 
 
 # =========================================================
@@ -42,118 +41,30 @@ FONT_PATH = os.path.join(BASE_DIR, "Cairo-Regular.ttf")
 # ARABIC FONT
 # =========================================================
 
-def _find_android_arabic_font():
-    """Prefer the phone's own Arabic font when Android exposes one."""
-    if platform != "android":
-        return ""
-
-    preferred_paths = [
-        "/system/fonts/NotoNaskhArabic-Regular.ttf",
-        "/system/fonts/NotoSansArabic-Regular.ttf",
-        "/system/fonts/NotoNaskhArabicUI-Regular.ttf",
-        "/system/fonts/NotoSansArabicUI-Regular.ttf",
-        "/system/fonts/DroidSansArabic.ttf",
-    ]
-
-    for font_path in preferred_paths:
-        if os.path.exists(font_path):
-            return font_path
-
-    # OEMs can rename system fonts. Search the read-only Android font folder
-    # and prefer Noto / Arabic named fonts without requiring any permission.
-    try:
-        font_dir = "/system/fonts"
-
-        if os.path.isdir(font_dir):
-            candidates = []
-
-            for filename in os.listdir(font_dir):
-                lower = filename.lower()
-
-                if not lower.endswith((".ttf", ".otf", ".ttc")):
-                    continue
-
-                if "arab" not in lower:
-                    continue
-
-                score = 0
-
-                if "noto" in lower:
-                    score += 10
-                if "naskh" in lower:
-                    score += 6
-                if "sans" in lower:
-                    score += 3
-                if "regular" in lower:
-                    score += 2
-
-                candidates.append(
-                    (
-                        score,
-                        os.path.join(
-                            font_dir,
-                            filename
-                        )
-                    )
-                )
-
-            if candidates:
-                candidates.sort(
-                    key=lambda item: item[0],
-                    reverse=True
-                )
-                return candidates[0][1]
-
-    except Exception as exc:
-        print(
-            "811: Android system Arabic font scan warning:",
-            repr(exc)
-        )
-
-    return ""
-
-
+# Keep Kivy on the bundled Cairo font. It supports Arabic and Latin together
+# and avoids OEM-specific Android fonts that can miss Latin/presentation glyphs.
 ARABIC_FONT = "Roboto"
-ANDROID_ARABIC_FONT_PATH = _find_android_arabic_font()
 
-if ANDROID_ARABIC_FONT_PATH:
+if os.path.exists(FONT_PATH):
     try:
         LabelBase.register(
-            name="AndroidArabic",
-            fn_regular=ANDROID_ARABIC_FONT_PATH
+            name="Cairo",
+            fn_regular=FONT_PATH
         )
-        ARABIC_FONT = "AndroidArabic"
+        ARABIC_FONT = "Cairo"
         print(
-            "811: Android system Arabic font loaded:",
-            ANDROID_ARABIC_FONT_PATH
+            "811: Cairo-Regular.ttf loaded successfully"
         )
     except Exception as exc:
         print(
-            "811: Android Arabic font registration error:",
+            "811: Cairo font registration error:",
             repr(exc)
         )
-
-if ARABIC_FONT == "Roboto":
-    if os.path.exists(FONT_PATH):
-        try:
-            LabelBase.register(
-                name="Cairo",
-                fn_regular=FONT_PATH
-            )
-            ARABIC_FONT = "Cairo"
-            print(
-                "811: Cairo-Regular.ttf loaded as fallback"
-            )
-        except Exception as exc:
-            print(
-                "811: Cairo font registration error:",
-                repr(exc)
-            )
-    else:
-        print(
-            "811: Cairo-Regular.ttf NOT FOUND:",
-            FONT_PATH
-        )
+else:
+    print(
+        "811: Cairo-Regular.ttf NOT FOUND:",
+        FONT_PATH
+    )
 
 
 # =========================================================
@@ -183,6 +94,17 @@ HIDDEN_UNICODE = (
 # If a long visual RTL line is wrapped by Kivy, the resulting rows appear
 # bottom-to-top. Wrap the logical Arabic text first, then reshape every row.
 OUTPUT_ARABIC_WRAP_CHARS = 30
+
+# Disable Arabic ligature substitution. Some fonts/devices can show a missing
+# glyph square for presentation-form ligatures even when normal Arabic letters
+# are available. Individual letter shaping remains enabled.
+ARABIC_RESHAPER = arabic_reshaper.ArabicReshaper(
+    configuration={
+        "support_ligatures": False,
+        "delete_harakat": True,
+        "support_zwj": True,
+    }
+)
 
 
 def clean_unicode(text):
@@ -275,7 +197,7 @@ def fix_text(text, wrap_at=None):
             continue
 
         try:
-            reshaped = arabic_reshaper.reshape(line)
+            reshaped = ARABIC_RESHAPER.reshape(line)
             display_lines.append(
                 get_display(
                     reshaped,
@@ -553,7 +475,7 @@ class VoiceAssistantApp(App):
         self.arabic_font = ARABIC_FONT
 
         # -------------------------
-        # Native Android Arabic chat renderer
+        # Chat logical text
         # -------------------------
 
         self._chat_raw_text = (
@@ -561,11 +483,6 @@ class VoiceAssistantApp(App):
             "أنا 811\n"
             "جاهز للعمل معك."
         )
-        self.native_chat_scroll = None
-        self.native_chat_text = None
-        self.native_chat_ready = False
-        self.native_chat_error = ""
-        self._native_chat_layout_params = None
 
         request_android_permissions()
 
@@ -854,12 +771,6 @@ class VoiceAssistantApp(App):
             self.scroll
         )
 
-        self.chat_panel = chat_panel
-        self.chat_panel.bind(
-            pos=self._schedule_native_chat_bounds_sync,
-            size=self._schedule_native_chat_bounds_sync
-        )
-
         main.add_widget(
             chat_panel
         )
@@ -986,15 +897,6 @@ class VoiceAssistantApp(App):
         )
 
         if platform == "android":
-            # Use Android's own TextView for the conversation text.
-            # This gives us the same Arabic shaping, glyph fallback,
-            # punctuation and line wrapping used by the phone itself.
-            Clock.schedule_once(
-                lambda dt:
-                self.init_native_chat(),
-                0.45
-            )
-
             Clock.schedule_once(
                 lambda dt:
                 self.init_native_tts(),
@@ -1039,282 +941,17 @@ class VoiceAssistantApp(App):
         )
 
     # =====================================================
-    # NATIVE ANDROID CHAT TEXT
+    # CHAT TEXT
     # =====================================================
-
-    def init_native_chat(
-        self
-    ):
-        """Create a native Android ScrollView + TextView over the Kivy chat."""
-        if platform != "android":
-            return
-
-        self._run_on_android_ui(
-            self._init_native_chat_on_ui
-        )
-
-    def _init_native_chat_on_ui(
-        self
-    ):
-        try:
-            from jnius import autoclass
-
-            PythonActivity = autoclass(
-                "org.kivy.android.PythonActivity"
-            )
-            AndroidScrollView = autoclass(
-                "android.widget.ScrollView"
-            )
-            TextView = autoclass(
-                "android.widget.TextView"
-            )
-            FrameLayoutParams = autoclass(
-                "android.widget.FrameLayout$LayoutParams"
-            )
-            ViewGroupParams = autoclass(
-                "android.view.ViewGroup$LayoutParams"
-            )
-            Gravity = autoclass(
-                "android.view.Gravity"
-            )
-            View = autoclass(
-                "android.view.View"
-            )
-            AndroidColor = autoclass(
-                "android.graphics.Color"
-            )
-            TypedValue = autoclass(
-                "android.util.TypedValue"
-            )
-            Typeface = autoclass(
-                "android.graphics.Typeface"
-            )
-            JavaString = autoclass(
-                "java.lang.String"
-            )
-
-            activity = PythonActivity.mActivity
-
-            if activity is None:
-                raise RuntimeError(
-                    "Android Activity unavailable for native Arabic text"
-                )
-
-            # Remove an older overlay if Android recreated the activity.
-            if self.native_chat_scroll is not None:
-                try:
-                    parent = self.native_chat_scroll.getParent()
-                    if parent is not None:
-                        parent.removeView(
-                            self.native_chat_scroll
-                        )
-                except Exception:
-                    pass
-
-            native_scroll = AndroidScrollView(
-                activity
-            )
-            native_text = TextView(
-                activity
-            )
-
-            native_scroll.setFillViewport(True)
-            native_scroll.setBackgroundColor(
-                AndroidColor.TRANSPARENT
-            )
-            native_scroll.setVerticalScrollBarEnabled(True)
-            native_scroll.setClipToPadding(False)
-
-            native_text.setBackgroundColor(
-                AndroidColor.TRANSPARENT
-            )
-            native_text.setTextColor(
-                AndroidColor.rgb(
-                    224,
-                    230,
-                    242
-                )
-            )
-            native_text.setTextSize(
-                TypedValue.COMPLEX_UNIT_SP,
-                17.0
-            )
-            native_text.setGravity(
-                Gravity.RIGHT
-                | Gravity.TOP
-            )
-
-            try:
-                native_text.setTextDirection(
-                    View.TEXT_DIRECTION_RTL
-                )
-                native_text.setTextAlignment(
-                    View.TEXT_ALIGNMENT_VIEW_END
-                )
-            except Exception as direction_exc:
-                print(
-                    "811: Native chat RTL direction warning:",
-                    repr(direction_exc)
-                )
-
-            # System sans-serif delegates Arabic shaping and missing glyph
-            # fallback to Android, instead of python-bidi presentation forms.
-            try:
-                native_text.setTypeface(
-                    Typeface.create(
-                        "sans-serif",
-                        Typeface.NORMAL
-                    )
-                )
-            except Exception as font_exc:
-                print(
-                    "811: Native chat system font warning:",
-                    repr(font_exc)
-                )
-
-            native_text.setIncludeFontPadding(False)
-            native_text.setLineSpacing(
-                0.0,
-                1.18
-            )
-            native_text.setTextIsSelectable(True)
-
-            density = float(
-                activity.getResources()
-                .getDisplayMetrics()
-                .density
-            )
-
-            pad_h = int(
-                12.0 * density
-            )
-            pad_v = int(
-                18.0 * density
-            )
-
-            native_text.setPadding(
-                pad_h,
-                pad_v,
-                pad_h,
-                pad_v
-            )
-
-            native_scroll.addView(
-                native_text,
-                ViewGroupParams(
-                    ViewGroupParams.MATCH_PARENT,
-                    ViewGroupParams.WRAP_CONTENT
-                )
-            )
-
-            params = FrameLayoutParams(
-                1,
-                1
-            )
-            params.gravity = (
-                Gravity.LEFT
-                | Gravity.TOP
-            )
-
-            activity.addContentView(
-                native_scroll,
-                params
-            )
-
-            self.native_chat_scroll = native_scroll
-            self.native_chat_text = native_text
-            self._native_chat_layout_params = params
-            self.native_chat_ready = True
-            self.native_chat_error = ""
-
-            # Explicit Java String avoids overloaded TextView.setText(int).
-            native_text.setText(
-                JavaString(
-                    clean_unicode(
-                        self._chat_raw_text
-                    )
-                )
-            )
-
-            print(
-                "811: Native Android Arabic chat renderer ready"
-            )
-
-            Clock.schedule_once(
-                lambda dt:
-                self._activate_native_chat_fallback_switch(),
-                0
-            )
-
-            Clock.schedule_once(
-                lambda dt:
-                self._sync_native_chat_bounds(),
-                0
-            )
-
-        except Exception as exc:
-            self.native_chat_ready = False
-            self.native_chat_error = (
-                type(exc).__name__
-                + ": "
-                + str(exc)
-            )
-
-            print(
-                "811: Native Arabic chat init error:",
-                repr(exc)
-            )
-
-            Clock.schedule_once(
-                lambda dt:
-                self._restore_kivy_chat_fallback(),
-                0
-            )
-
-    def _activate_native_chat_fallback_switch(
-        self
-    ):
-        if not self.native_chat_ready:
-            return
-
-        # Keep the Kivy label as an emergency fallback, but hide its visual
-        # text while Android TextView is active so there is no double render.
-        self.output_label.opacity = 0
-        self.scroll.bar_width = 0
-
-    def _restore_kivy_chat_fallback(
-        self
-    ):
-        self.output_label.opacity = 1
-        self.scroll.bar_width = dp(4)
-        self.output_label.text = fix_text(
-            self._chat_raw_text,
-            wrap_at=OUTPUT_ARABIC_WRAP_CHARS
-        )
 
     def _set_chat_text(
         self,
         text
     ):
-        """Store logical text once; Android renders it natively when possible."""
+        """Update logical chat text and render it safely in Kivy."""
         self._chat_raw_text = clean_unicode(
             text
         )
-
-        if (
-            platform == "android"
-            and self.native_chat_ready
-            and self.native_chat_text is not None
-        ):
-            logical_text = self._chat_raw_text
-
-            self._run_on_android_ui(
-                lambda:
-                self._set_native_chat_text_on_ui(
-                    logical_text
-                )
-            )
-            return
 
         self.output_label.text = fix_text(
             self._chat_raw_text,
@@ -1356,190 +993,6 @@ class VoiceAssistantApp(App):
         self._set_chat_text(
             combined
         )
-
-    def _set_native_chat_text_on_ui(
-        self,
-        text
-    ):
-        try:
-            from jnius import autoclass
-
-            JavaString = autoclass(
-                "java.lang.String"
-            )
-
-            if self.native_chat_text is None:
-                return
-
-            self.native_chat_text.setText(
-                JavaString(
-                    text
-                )
-            )
-
-            if self.native_chat_scroll is not None:
-                self.native_chat_scroll.scrollTo(
-                    0,
-                    0
-                )
-
-        except Exception as exc:
-            print(
-                "811: Native Arabic chat text error:",
-                repr(exc)
-            )
-
-            self.native_chat_ready = False
-
-            Clock.schedule_once(
-                lambda dt:
-                self._restore_kivy_chat_fallback(),
-                0
-            )
-
-    def _schedule_native_chat_bounds_sync(
-        self,
-        *args
-    ):
-        if platform != "android":
-            return
-
-        Clock.schedule_once(
-            lambda dt:
-            self._sync_native_chat_bounds(),
-            0
-        )
-
-    def _sync_native_chat_bounds(
-        self
-    ):
-        if (
-            platform != "android"
-            or not self.native_chat_ready
-            or self.native_chat_scroll is None
-        ):
-            return
-
-        try:
-            x, y = self.chat_panel.to_window(
-                0,
-                0
-            )
-
-            width = int(
-                max(
-                    1,
-                    self.chat_panel.width
-                )
-            )
-            height = int(
-                max(
-                    1,
-                    self.chat_panel.height
-                )
-            )
-            left = int(
-                max(
-                    0,
-                    x
-                )
-            )
-            top = int(
-                max(
-                    0,
-                    Window.height
-                    - (
-                        y
-                        + self.chat_panel.height
-                    )
-                )
-            )
-
-            self._run_on_android_ui(
-                lambda:
-                self._apply_native_chat_bounds_on_ui(
-                    left,
-                    top,
-                    width,
-                    height
-                )
-            )
-
-        except Exception as exc:
-            print(
-                "811: Native chat bounds calculation error:",
-                repr(exc)
-            )
-
-    def _apply_native_chat_bounds_on_ui(
-        self,
-        left,
-        top,
-        width,
-        height
-    ):
-        try:
-            from jnius import autoclass
-
-            FrameLayoutParams = autoclass(
-                "android.widget.FrameLayout$LayoutParams"
-            )
-            Gravity = autoclass(
-                "android.view.Gravity"
-            )
-
-            if self.native_chat_scroll is None:
-                return
-
-            params = FrameLayoutParams(
-                int(width),
-                int(height)
-            )
-            params.gravity = (
-                Gravity.LEFT
-                | Gravity.TOP
-            )
-            params.leftMargin = int(
-                left
-            )
-            params.topMargin = int(
-                top
-            )
-
-            self.native_chat_scroll.setLayoutParams(
-                params
-            )
-            self._native_chat_layout_params = params
-            self.native_chat_scroll.requestLayout()
-
-        except Exception as exc:
-            print(
-                "811: Native chat bounds apply error:",
-                repr(exc)
-            )
-
-    def _destroy_native_chat_on_ui(
-        self
-    ):
-        try:
-            if self.native_chat_scroll is not None:
-                parent = self.native_chat_scroll.getParent()
-
-                if parent is not None:
-                    parent.removeView(
-                        self.native_chat_scroll
-                    )
-
-        except Exception as exc:
-            print(
-                "811: Native chat destroy error:",
-                repr(exc)
-            )
-
-        self.native_chat_scroll = None
-        self.native_chat_text = None
-        self.native_chat_ready = False
-        self._native_chat_layout_params = None
 
     # =====================================================
     # STATES
@@ -3582,18 +3035,6 @@ class VoiceAssistantApp(App):
         except Exception as exc:
             print(
                 "811: TTS shutdown error:",
-                repr(exc)
-            )
-
-        try:
-            if self.native_chat_scroll is not None:
-                self._run_on_android_ui(
-                    self._destroy_native_chat_on_ui
-                )
-
-        except Exception as exc:
-            print(
-                "811: Native chat shutdown error:",
                 repr(exc)
             )
 
