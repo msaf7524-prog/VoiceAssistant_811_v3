@@ -1198,6 +1198,7 @@ class VoiceAssistantApp(App):
         )
 
         self.speak_btn = Button(
+            size_hint_x=0.78,
             text=fix_text(
                 "اضغط للتحدث"
             ),
@@ -1225,6 +1226,7 @@ class VoiceAssistantApp(App):
         )
 
         self.clear_btn = Button(
+            size_hint_x=0.22,
             text=fix_text(
                 "مسح"
             ),
