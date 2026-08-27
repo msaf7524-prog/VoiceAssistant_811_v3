@@ -3648,9 +3648,9 @@ class VoiceAssistantApp(App):
             self.stop_listening()
             return
 
-        # Voice barge-in: pressing Talk while 811 is speaking stops TTS first.
+        # Prevent repeated Talk presses while 811 is still speaking.
         if self.tts_is_speaking or self._tts_pending_text:
-            self.stop_speaking()
+            return
 
         groq_key = (
             self.key_input
