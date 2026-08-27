@@ -348,6 +348,7 @@ class StatusOrb(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.status_color = (0.13, 0.59, 0.95, 1.0)
+        self.voice_level = 0.0
         self.bind(pos=self._redraw, size=self._redraw)
 
     def set_state(self, state):
@@ -359,6 +360,25 @@ class StatusOrb(Widget):
             "error": (0.92, 0.20, 0.22, 1.0),
         }
         self.status_color = colors.get(state, colors["ready"])
+
+        if state != "listening":
+            self.voice_level = 0.0
+
+        self._redraw()
+
+    def set_voice_level(self, level):
+        """Update the orb from Android SpeechRecognizer RMS loudness."""
+        try:
+            target = max(0.0, min(1.0, float(level)))
+        except Exception:
+            target = 0.0
+
+        # Smooth tiny RMS jumps while keeping the response visibly quick.
+        self.voice_level = (
+            self.voice_level * 0.55
+            + target * 0.45
+        )
+
         self._redraw()
 
     def _redraw(self, *args):
@@ -370,7 +390,18 @@ class StatusOrb(Widget):
         with self.canvas:
             cx = self.center_x
             cy = self.center_y
-            radius = min(self.width, self.height) * 0.27
+            level = max(
+                0.0,
+                min(1.0, self.voice_level)
+            )
+
+            # The whole voice core gently grows with real microphone loudness.
+            reactive_scale = 1.0 + (level * 0.12)
+            radius = (
+                min(self.width, self.height)
+                * 0.27
+                * reactive_scale
+            )
 
             # Soft outer aura.
             Color(
@@ -438,10 +469,16 @@ class StatusOrb(Widget):
             Color(1, 1, 1, 0.96)
             bar_gap = radius * 0.22
             bar_heights = (0.42, 0.78, 1.12, 0.78, 0.42)
+            waveform_scale = 0.55 + (level * 1.05)
 
             for index, height_scale in enumerate(bar_heights):
                 x = cx + (index - 2) * bar_gap
-                half_h = radius * height_scale * 0.34
+                half_h = (
+                    radius
+                    * height_scale
+                    * 0.34
+                    * waveform_scale
+                )
                 Line(
                     points=[x, cy - half_h, x, cy + half_h],
                     width=2.7
@@ -2830,7 +2867,9 @@ class VoiceAssistantApp(App):
                     self,
                     rmsdB
                 ):
-                    pass
+                    outer.on_speech_rms(
+                        float(rmsdB)
+                    )
 
                 @java_method(
                     "([B)V"
@@ -3248,6 +3287,32 @@ class VoiceAssistantApp(App):
     # =====================================================
     # SPEECH CALLBACKS
     # =====================================================
+
+    @mainthread
+    def on_speech_rms(
+        self,
+        rms_db
+    ):
+        """Drive the visualizer from real microphone loudness while listening."""
+        if not self.is_listening:
+            return
+
+        try:
+            rms_db = float(rms_db)
+        except Exception:
+            return
+
+        # Android SpeechRecognizer commonly reports roughly -2..10+ dB.
+        # Clamp it into a stable visual 0..1 range and ignore tiny room noise.
+        level = (rms_db + 2.0) / 12.0
+        level = max(0.0, min(1.0, level))
+
+        if level < 0.08:
+            level = 0.0
+
+        self.status_orb.set_voice_level(
+            level
+        )
 
     @mainthread
     def on_speech_ready(
