@@ -28,10 +28,10 @@ from ai_client import AIClient
 
 
 # =========================================================
-# VERSION 0.3.1
+# VERSION 0.3.2
 # =========================================================
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 
 # =========================================================
@@ -479,6 +479,88 @@ class StatusOrb(Widget):
                 ),
                 width=1.2
             )
+
+
+class ActionButton(Button):
+    """Normal Kivy Button with a small static Canvas icon. No animation/timers."""
+
+    def __init__(self, icon_kind="", **kwargs):
+        self.icon_kind = icon_kind
+        super().__init__(**kwargs)
+        self.bind(pos=self._redraw_icon, size=self._redraw_icon)
+        self._redraw_icon()
+
+    def _redraw_icon(self, *args):
+        self.canvas.after.clear()
+
+        if self.width <= 0 or self.height <= 0:
+            return
+
+        # Keep icon safely away from centered Arabic text.
+        cx = self.x + dp(25)
+        cy = self.center_y
+        scale = min(self.height, dp(52)) / dp(52)
+
+        with self.canvas.after:
+            Color(1, 1, 1, 0.92)
+
+            if self.icon_kind == "mic":
+                # Microphone capsule
+                Line(
+                    rounded_rectangle=(
+                        cx - dp(5) * scale,
+                        cy - dp(10) * scale,
+                        dp(10) * scale,
+                        dp(20) * scale,
+                        dp(5) * scale
+                    ),
+                    width=1.7
+                )
+                # Support curve + stem
+                Line(
+                    points=[
+                        cx - dp(9) * scale, cy - dp(1) * scale,
+                        cx - dp(9) * scale, cy - dp(5) * scale,
+                        cx - dp(6) * scale, cy - dp(9) * scale,
+                        cx, cy - dp(11) * scale,
+                        cx + dp(6) * scale, cy - dp(9) * scale,
+                        cx + dp(9) * scale, cy - dp(5) * scale,
+                        cx + dp(9) * scale, cy - dp(1) * scale,
+                    ],
+                    width=1.7
+                )
+                Line(
+                    points=[
+                        cx, cy - dp(11) * scale,
+                        cx, cy - dp(16) * scale
+                    ],
+                    width=1.7
+                )
+                Line(
+                    points=[
+                        cx - dp(6) * scale, cy - dp(16) * scale,
+                        cx + dp(6) * scale, cy - dp(16) * scale
+                    ],
+                    width=1.7
+                )
+
+            elif self.icon_kind == "clear":
+                # Simple X/clear icon; avoids font/emoji glyph problems.
+                Line(
+                    points=[
+                        cx - dp(7) * scale, cy - dp(7) * scale,
+                        cx + dp(7) * scale, cy + dp(7) * scale
+                    ],
+                    width=1.9
+                )
+                Line(
+                    points=[
+                        cx - dp(7) * scale, cy + dp(7) * scale,
+                        cx + dp(7) * scale, cy - dp(7) * scale
+                    ],
+                    width=1.9
+                )
+
 
 
 # =========================================================
@@ -1197,7 +1279,8 @@ class VoiceAssistantApp(App):
             spacing=dp(9)
         )
 
-        self.speak_btn = Button(
+        self.speak_btn = ActionButton(
+            icon_kind="mic",
             text=fix_text(
                 "اضغط للتحدث"
             ),
@@ -1224,7 +1307,8 @@ class VoiceAssistantApp(App):
             on_press=self.on_speak_click
         )
 
-        self.clear_btn = Button(
+        self.clear_btn = ActionButton(
+            icon_kind="clear",
             text=fix_text(
                 "مسح"
             ),
