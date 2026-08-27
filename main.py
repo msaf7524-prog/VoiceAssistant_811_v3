@@ -343,61 +343,22 @@ def request_android_permissions():
 # =========================================================
 
 class StatusOrb(Widget):
+    """Static futuristic voice core. No animation or timers."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-        self.status_color = (
-            0.13,
-            0.59,
-            0.95,
-            1.0
-        )
-
-        self.bind(
-            pos=self._redraw,
-            size=self._redraw
-        )
+        self.status_color = (0.13, 0.59, 0.95, 1.0)
+        self.bind(pos=self._redraw, size=self._redraw)
 
     def set_state(self, state):
         colors = {
-            "ready": (
-                0.13,
-                0.59,
-                0.95,
-                1.0
-            ),
-            "listening": (
-                0.00,
-                0.78,
-                0.88,
-                1.0
-            ),
-            "thinking": (
-                1.00,
-                0.60,
-                0.08,
-                1.0
-            ),
-            "speaking": (
-                0.20,
-                0.80,
-                0.30,
-                1.0
-            ),
-            "error": (
-                0.92,
-                0.20,
-                0.22,
-                1.0
-            )
+            "ready": (0.13, 0.59, 0.95, 1.0),
+            "listening": (0.00, 0.78, 0.88, 1.0),
+            "thinking": (1.00, 0.60, 0.08, 1.0),
+            "speaking": (0.20, 0.80, 0.30, 1.0),
+            "error": (0.92, 0.20, 0.22, 1.0),
         }
-
-        self.status_color = colors.get(
-            state,
-            colors["ready"]
-        )
-
+        self.status_color = colors.get(state, colors["ready"])
         self._redraw()
 
     def _redraw(self, *args):
@@ -409,76 +370,82 @@ class StatusOrb(Widget):
         with self.canvas:
             cx = self.center_x
             cy = self.center_y
+            radius = min(self.width, self.height) * 0.27
 
-            radius = min(
-                self.width,
-                self.height
-            ) * 0.22
+            # Soft outer aura.
+            Color(
+                self.status_color[0],
+                self.status_color[1],
+                self.status_color[2],
+                0.055
+            )
+            Ellipse(
+                pos=(cx - radius * 1.78, cy - radius * 1.78),
+                size=(radius * 3.56, radius * 3.56)
+            )
+
+            # Futuristic concentric rings.
+            Color(
+                self.status_color[0],
+                self.status_color[1],
+                self.status_color[2],
+                0.16
+            )
+            Line(circle=(cx, cy, radius * 1.66), width=1.25)
 
             Color(
                 self.status_color[0],
                 self.status_color[1],
                 self.status_color[2],
-                0.10
+                0.34
             )
+            Line(circle=(cx, cy, radius * 1.34), width=1.45)
 
-            Ellipse(
-                pos=(
-                    cx - radius * 2.4,
-                    cy - radius * 2.4
-                ),
-                size=(
-                    radius * 4.8,
-                    radius * 4.8
-                )
+            Color(
+                self.status_color[0],
+                self.status_color[1],
+                self.status_color[2],
+                0.70
             )
+            Line(circle=(cx, cy, radius * 1.10), width=1.8)
 
+            # Main luminous voice core.
             Color(
                 self.status_color[0],
                 self.status_color[1],
                 self.status_color[2],
                 0.18
             )
-
             Ellipse(
-                pos=(
-                    cx - radius * 1.75,
-                    cy - radius * 1.75
-                ),
-                size=(
-                    radius * 3.5,
-                    radius * 3.5
-                )
+                pos=(cx - radius * 1.06, cy - radius * 1.06),
+                size=(radius * 2.12, radius * 2.12)
             )
 
             Color(*self.status_color)
-
             Ellipse(
-                pos=(
-                    cx - radius,
-                    cy - radius
-                ),
-                size=(
-                    radius * 2,
-                    radius * 2
+                pos=(cx - radius * 0.86, cy - radius * 0.86),
+                size=(radius * 1.72, radius * 1.72)
+            )
+
+            # Subtle upper highlight.
+            Color(1, 1, 1, 0.16)
+            Ellipse(
+                pos=(cx - radius * 0.50, cy + radius * 0.18),
+                size=(radius * 0.62, radius * 0.30)
+            )
+
+            # Static waveform mark in the center.
+            Color(1, 1, 1, 0.96)
+            bar_gap = radius * 0.22
+            bar_heights = (0.42, 0.78, 1.12, 0.78, 0.42)
+
+            for index, height_scale in enumerate(bar_heights):
+                x = cx + (index - 2) * bar_gap
+                half_h = radius * height_scale * 0.34
+                Line(
+                    points=[x, cy - half_h, x, cy + half_h],
+                    width=2.7
                 )
-            )
-
-            Color(
-                1,
-                1,
-                1,
-                0.22
-            )
-
-            Line(
-                circle=(
-                    cx,
-                    cy,
-                    radius * 0.82
-                ),
-                width=1.2
-            )
 
 
 # =========================================================
