@@ -1,6 +1,7 @@
 import os
 import re
 import threading
+import unicodedata
 from io import BytesIO
 
 from kivy.app import App
@@ -159,6 +160,8 @@ HIDDEN_UNICODE = (
     "\u2067"
     "\u2068"
     "\u2069"
+    "\ufe0e"
+    "\ufe0f"
     "\ufeff"
 )
 
@@ -183,7 +186,7 @@ def clean_unicode(text):
     if text is None:
         return ""
 
-    text = str(text)
+    text = unicodedata.normalize("NFKC", str(text))
 
     for char in HIDDEN_UNICODE:
         text = text.replace(char, "")
