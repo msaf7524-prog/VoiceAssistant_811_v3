@@ -2,6 +2,7 @@ import os
 import math
 import re
 import threading
+import time
 import unicodedata
 from io import BytesIO
 
@@ -354,6 +355,7 @@ class StatusOrb(Widget):
         self.current_state = "ready"
         self.pulse_phase = 0.0
         self.pulse_energy = 0.0
+        self._pulse_last_time = None
         self.bind(pos=self._redraw, size=self._redraw)
 
     def set_state(self, state):
@@ -364,6 +366,7 @@ class StatusOrb(Widget):
             "speaking": (0.20, 0.80, 0.30, 1.0),
             "error": (0.92, 0.20, 0.22, 1.0),
         }
+        previous_state = self.current_state
         self.current_state = state
         self.status_color = colors.get(state, colors["ready"])
 
@@ -372,6 +375,13 @@ class StatusOrb(Widget):
             self.wave_bars = None
             self.pulse_phase = 0.0
             self.pulse_energy = 0.0
+            self._pulse_last_time = None
+        elif previous_state != state:
+            # Begin each listening/speaking phase from the core. This prevents
+            # a state change from making a ring appear to reverse inward.
+            self.pulse_phase = 0.0
+            self.pulse_energy = 0.0
+            self._pulse_last_time = time.monotonic()
 
         self._redraw()
 
@@ -404,13 +414,39 @@ class StatusOrb(Widget):
             + target * new_weight
         )
 
-        # Drive three rings outward from the core using the same real audio
-        # callbacks. No extra timer is introduced.
+        # Drive the rings from REAL ELAPSED TIME rather than callback count.
+        # SpeechRecognizer can deliver RMS callbacks much faster than Android
+        # TTS Visualizer, which was why the user's rings raced excessively.
         if self.current_state in ("listening", "speaking"):
+            now = time.monotonic()
+
+            if self._pulse_last_time is None:
+                elapsed = 0.0
+            else:
+                elapsed = max(
+                    0.0,
+                    min(0.12, now - self._pulse_last_time)
+                )
+
+            self._pulse_last_time = now
+
             if self.voice_level > 0.035:
-                step = 0.055 + (self.voice_level * 0.23)
+                if self.current_state == "listening":
+                    # User voice: deliberately slowed down a lot.
+                    cycles_per_second = (
+                        0.26
+                        + (self.voice_level * 0.11)
+                    )
+                else:
+                    # 811 voice: cinematic slow-motion, still audio reactive.
+                    cycles_per_second = (
+                        0.22
+                        + (self.voice_level * 0.09)
+                    )
+
                 self.pulse_phase = (
-                    self.pulse_phase + step
+                    self.pulse_phase
+                    + (elapsed * cycles_per_second)
                 ) % 1.0
 
             self.pulse_energy = (
@@ -486,11 +522,17 @@ class StatusOrb(Widget):
                 min(1.0, self.voice_level)
             )
 
-            # Stronger core expansion so speech is visibly alive.
-            reactive_scale = 1.0 + (level * 0.19)
-            radius = (
+            # The luminous core may breathe with speech, but the travelling
+            # rings use a FIXED base radius. This is critical: if ring radius
+            # is multiplied by the changing voice level, a drop in loudness
+            # can visually pull a ring backward toward the center.
+            base_radius = (
                 min(self.width, self.height)
                 * 0.27
+            )
+            reactive_scale = 1.0 + (level * 0.19)
+            radius = (
+                base_radius
                 * reactive_scale
             )
 
@@ -506,51 +548,57 @@ class StatusOrb(Widget):
                 size=(radius * 3.56, radius * 3.56)
             )
 
-            # Three voice rings now EMIT from the core and travel outward.
-            # Their positions advance from the real microphone/TTS callbacks.
+            # Three cinematic rings EMIT from the core and ONLY travel
+            # outward. They fade to invisible at the outside edge before a
+            # new ring is born at the core, so there is no visual "return".
             if self.current_state in ("listening", "speaking"):
                 ring_offsets = (0.0, 0.333, 0.666)
 
-                for ring_index, offset in enumerate(ring_offsets):
+                for offset in ring_offsets:
                     progress = (
                         self.pulse_phase + offset
                     ) % 1.0
 
-                    ring_radius = radius * (
-                        1.02
-                        + (progress * 0.92)
-                        + (level * 0.08)
+                    # Radius is based on base_radius, NOT the breathing core.
+                    # Therefore every visible ring is monotonically outward.
+                    ring_radius = base_radius * (
+                        0.98
+                        + (progress * 1.08)
                     )
 
-                    # Strong near the core, softer as the ring expands.
-                    fade = 1.0 - progress
-                    alpha = (
-                        0.10
-                        + (fade * 0.52)
-                    ) * (
-                        0.42
-                        + (self.pulse_energy * 0.78)
+                    # Fade all the way to zero before the ring wraps back to
+                    # the core. This makes the reset read as a fresh emission.
+                    fade = max(
+                        0.0,
+                        1.0 - progress
+                    )
+                    fade = fade ** 1.55
+
+                    alpha = fade * (
+                        0.30
+                        + (self.pulse_energy * 0.62)
                     )
 
                     ring_width = (
-                        1.10
-                        + (fade * 1.45)
+                        0.85
+                        + (fade * 1.55)
                     )
 
-                    Color(
-                        self.status_color[0],
-                        self.status_color[1],
-                        self.status_color[2],
-                        max(0.08, min(0.78, alpha))
-                    )
-                    Line(
-                        circle=(
-                            cx,
-                            cy,
-                            ring_radius
-                        ),
-                        width=ring_width
-                    )
+                    if alpha > 0.012:
+                        Color(
+                            self.status_color[0],
+                            self.status_color[1],
+                            self.status_color[2],
+                            min(0.82, alpha)
+                        )
+                        Line(
+                            circle=(
+                                cx,
+                                cy,
+                                ring_radius
+                            ),
+                            width=ring_width
+                        )
 
             else:
                 # Calm static rings while idle/thinking/error.
