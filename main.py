@@ -349,6 +349,7 @@ class StatusOrb(Widget):
         super().__init__(**kwargs)
         self.status_color = (0.13, 0.59, 0.95, 1.0)
         self.voice_level = 0.0
+        self.wave_bars = None
         self.bind(pos=self._redraw, size=self._redraw)
 
     def set_state(self, state):
@@ -363,6 +364,7 @@ class StatusOrb(Widget):
 
         if state not in ("listening", "speaking"):
             self.voice_level = 0.0
+            self.wave_bars = None
 
         self._redraw()
 
@@ -378,6 +380,34 @@ class StatusOrb(Widget):
             self.voice_level * 0.55
             + target * 0.45
         )
+
+        self._redraw()
+
+    def set_tts_waveform(self, level, bars):
+        """Update center bars from the actual Android TTS output waveform."""
+        self.set_voice_level(level)
+
+        try:
+            values = tuple(
+                max(0.0, min(1.0, float(value)))
+                for value in bars
+            )
+        except Exception:
+            values = ()
+
+        if len(values) == 5:
+            if self.wave_bars is None:
+                self.wave_bars = values
+            else:
+                # Smooth each bar independently so they move naturally
+                # without harsh flicker between audio capture frames.
+                self.wave_bars = tuple(
+                    (old_value * 0.42) + (new_value * 0.58)
+                    for old_value, new_value in zip(
+                        self.wave_bars,
+                        values
+                    )
+                )
 
         self._redraw()
 
@@ -472,20 +502,35 @@ class StatusOrb(Widget):
                 size=(radius * 0.62, radius * 0.30)
             )
 
-            # Static waveform mark in the center.
+            # Live waveform bars in the center.
             Color(1, 1, 1, 0.96)
             bar_gap = radius * 0.22
-            bar_heights = (0.42, 0.78, 1.12, 0.78, 0.42)
-            waveform_scale = 0.55 + (level * 1.05)
+            base_heights = (0.42, 0.78, 1.12, 0.78, 0.42)
 
-            for index, height_scale in enumerate(bar_heights):
+            if self.wave_bars is not None:
+                live_bars = self.wave_bars
+            else:
+                # Listening still follows the microphone RMS scalar.
+                microphone_scale = 0.55 + (level * 1.05)
+                live_bars = tuple(
+                    min(1.0, microphone_scale * factor)
+                    for factor in (0.55, 0.78, 1.0, 0.78, 0.55)
+                )
+
+            for index, height_scale in enumerate(base_heights):
                 x = cx + (index - 2) * bar_gap
+
+                # The middle three bars have the strongest visible movement.
+                emphasis = (0.82, 1.05, 1.22, 1.05, 0.82)[index]
+                live_scale = 0.34 + (live_bars[index] * 1.10 * emphasis)
+
                 half_h = (
                     radius
                     * height_scale
                     * 0.34
-                    * waveform_scale
+                    * live_scale
                 )
+
                 Line(
                     points=[x, cy - half_h, x, cy + half_h],
                     width=2.7
@@ -2325,8 +2370,63 @@ class VoiceAssistantApp(App):
                             min(1.0, level)
                         )
 
-                        outer.on_tts_output_level(
-                            level
+                        # Split the real output waveform into five short
+                        # time slices. Each slice gets its own amplitude so
+                        # the center bars move independently with 811's speech.
+                        bars = []
+                        bucket_count = 5
+
+                        for bucket in range(bucket_count):
+                            start = (
+                                count * bucket
+                            ) // bucket_count
+                            end = (
+                                count * (bucket + 1)
+                            ) // bucket_count
+
+                            bucket_sum_sq = 0.0
+                            bucket_peak = 0.0
+                            bucket_samples = max(1, end - start)
+
+                            for sample_index in range(start, end):
+                                bucket_sample = (
+                                    (int(waveform[sample_index]) & 0xFF)
+                                    - 128
+                                ) / 128.0
+
+                                absolute = abs(bucket_sample)
+                                bucket_sum_sq += (
+                                    bucket_sample
+                                    * bucket_sample
+                                )
+
+                                if absolute > bucket_peak:
+                                    bucket_peak = absolute
+
+                            bucket_rms = (
+                                bucket_sum_sq
+                                / float(bucket_samples)
+                            ) ** 0.5
+
+                            bucket_raw = (
+                                bucket_rms * 0.76
+                                + bucket_peak * 0.24
+                            )
+
+                            bucket_level = (
+                                bucket_raw - 0.012
+                            ) / 0.22
+
+                            bars.append(
+                                max(
+                                    0.0,
+                                    min(1.0, bucket_level)
+                                )
+                            )
+
+                        outer.on_tts_output_waveform(
+                            level,
+                            tuple(bars)
                         )
 
                     except Exception as exc:
@@ -2459,16 +2559,18 @@ class VoiceAssistantApp(App):
         )
 
     @mainthread
-    def on_tts_output_level(
+    def on_tts_output_waveform(
         self,
-        level
+        level,
+        bars
     ):
-        """Drive the green speaking orb from the actual Android output audio."""
+        """Drive the green orb and center bars from the real TTS output."""
         if not self.tts_is_speaking:
             return
 
-        self.status_orb.set_voice_level(
-            level
+        self.status_orb.set_tts_waveform(
+            level,
+            bars
         )
 
     def speak(
