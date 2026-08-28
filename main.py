@@ -416,13 +416,20 @@ class StatusOrb(Widget):
             )
 
             # Futuristic concentric rings.
+            # Each thin ring now expands by a different amount from the same
+            # real microphone RMS level, so the rings visibly "breathe" with
+            # the user's voice instead of moving as one rigid group.
+            outer_ring = 1.66 + (level * 0.12)
+            middle_ring = 1.34 + (level * 0.09)
+            inner_ring = 1.10 + (level * 0.06)
+
             Color(
                 self.status_color[0],
                 self.status_color[1],
                 self.status_color[2],
                 0.16
             )
-            Line(circle=(cx, cy, radius * 1.66), width=1.25)
+            Line(circle=(cx, cy, radius * outer_ring), width=1.25)
 
             Color(
                 self.status_color[0],
@@ -430,7 +437,7 @@ class StatusOrb(Widget):
                 self.status_color[2],
                 0.34
             )
-            Line(circle=(cx, cy, radius * 1.34), width=1.45)
+            Line(circle=(cx, cy, radius * middle_ring), width=1.45)
 
             Color(
                 self.status_color[0],
@@ -438,7 +445,7 @@ class StatusOrb(Widget):
                 self.status_color[2],
                 0.70
             )
-            Line(circle=(cx, cy, radius * 1.10), width=1.8)
+            Line(circle=(cx, cy, radius * inner_ring), width=1.8)
 
             # Main luminous voice core.
             Color(
