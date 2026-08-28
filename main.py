@@ -361,7 +361,7 @@ class StatusOrb(Widget):
         }
         self.status_color = colors.get(state, colors["ready"])
 
-        if state != "listening":
+        if state not in ("listening", "speaking"):
             self.voice_level = 0.0
 
         self._redraw()
@@ -867,6 +867,13 @@ class VoiceAssistantApp(App):
         self._tts_pending_text = ""
         self._tts_listener = None
         self._tts_watch_generation = 0
+
+        # Real output-audio visualizer used only while 811 is speaking.
+        # It listens to Android's output mix (audio session 0) and never
+        # changes the TTS playback path. If a device blocks Visualizer,
+        # TTS continues normally and only the visual reaction is skipped.
+        self._tts_output_visualizer = None
+        self._tts_output_visualizer_listener = None
 
         # -------------------------
         # SpeechRecognizer
@@ -2222,6 +2229,248 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
 
+    def _start_tts_output_visualizer(
+        self
+    ):
+        """Start real-time analysis of the audio mix while 811 speaks."""
+        if platform != "android":
+            return
+
+        self._run_on_android_ui(
+            self._start_tts_output_visualizer_on_ui
+        )
+
+    def _start_tts_output_visualizer_on_ui(
+        self
+    ):
+        # Always release a previous instance first.
+        self._stop_tts_output_visualizer_on_ui()
+
+        try:
+            from jnius import (
+                autoclass,
+                PythonJavaClass,
+                java_method
+            )
+
+            Visualizer = autoclass(
+                "android.media.audiofx.Visualizer"
+            )
+
+            outer = self
+
+            class OutputCaptureListener(
+                PythonJavaClass
+            ):
+                __javainterfaces__ = [
+                    "android/media/audiofx/"
+                    "Visualizer$OnDataCaptureListener"
+                ]
+                __javacontext__ = "app"
+
+                @java_method(
+                    "(Landroid/media/audiofx/"
+                    "Visualizer;[BI)V"
+                )
+                def onWaveFormDataCapture(
+                    self,
+                    visualizer,
+                    waveform,
+                    sampling_rate
+                ):
+                    try:
+                        if waveform is None:
+                            return
+
+                        count = len(waveform)
+                        if count <= 0:
+                            return
+
+                        sum_sq = 0.0
+                        peak = 0.0
+
+                        for value in waveform:
+                            # Android Visualizer waveform is unsigned 8-bit
+                            # PCM centered at 128. Pyjnius exposes Java bytes
+                            # as signed values, so normalize with & 0xFF.
+                            sample = (
+                                (int(value) & 0xFF)
+                                - 128
+                            ) / 128.0
+
+                            absolute = abs(sample)
+                            sum_sq += sample * sample
+
+                            if absolute > peak:
+                                peak = absolute
+
+                        rms = (
+                            sum_sq
+                            / float(count)
+                        ) ** 0.5
+
+                        # Blend RMS with peak so speech consonants remain lively
+                        # without making quiet background noise pulse the orb.
+                        raw_level = (
+                            rms * 0.78
+                            + peak * 0.22
+                        )
+
+                        level = (
+                            raw_level - 0.018
+                        ) / 0.30
+
+                        level = max(
+                            0.0,
+                            min(1.0, level)
+                        )
+
+                        outer.on_tts_output_level(
+                            level
+                        )
+
+                    except Exception as exc:
+                        print(
+                            "811: TTS output waveform error:",
+                            repr(exc)
+                        )
+
+                @java_method(
+                    "(Landroid/media/audiofx/"
+                    "Visualizer;[BI)V"
+                )
+                def onFftDataCapture(
+                    self,
+                    visualizer,
+                    fft,
+                    sampling_rate
+                ):
+                    # Waveform data is enough for real loudness reaction.
+                    pass
+
+            visualizer = Visualizer(0)
+
+            capture_range = (
+                Visualizer.getCaptureSizeRange()
+            )
+
+            min_capture = int(
+                capture_range[0]
+            )
+            max_capture = int(
+                capture_range[1]
+            )
+
+            capture_size = max(
+                min_capture,
+                min(512, max_capture)
+            )
+
+            visualizer.setCaptureSize(
+                capture_size
+            )
+
+            capture_rate = int(
+                Visualizer.getMaxCaptureRate()
+            )
+
+            listener = OutputCaptureListener()
+
+            result = visualizer.setDataCaptureListener(
+                listener,
+                capture_rate,
+                True,
+                False
+            )
+
+            # Visualizer.SUCCESS is 0. Treat any other result as unavailable.
+            if int(result) != 0:
+                try:
+                    visualizer.release()
+                except Exception:
+                    pass
+
+                print(
+                    "811: TTS output Visualizer listener unavailable:",
+                    result
+                )
+                return
+
+            visualizer.setEnabled(
+                True
+            )
+
+            # Keep strong references while Android callbacks are active.
+            self._tts_output_visualizer = visualizer
+            self._tts_output_visualizer_listener = listener
+
+            print(
+                "811: Real TTS output visualizer started"
+            )
+
+        except Exception as exc:
+            self._tts_output_visualizer = None
+            self._tts_output_visualizer_listener = None
+
+            # This feature is optional. A device/ROM may block output-mix
+            # Visualizer access; never let that break the working TTS path.
+            print(
+                "811: Real TTS output visualizer unavailable:",
+                repr(exc)
+            )
+
+    def _stop_tts_output_visualizer(
+        self
+    ):
+        if platform != "android":
+            self._tts_output_visualizer = None
+            self._tts_output_visualizer_listener = None
+            return
+
+        self._run_on_android_ui(
+            self._stop_tts_output_visualizer_on_ui
+        )
+
+    def _stop_tts_output_visualizer_on_ui(
+        self
+    ):
+        visualizer = self._tts_output_visualizer
+
+        self._tts_output_visualizer = None
+        self._tts_output_visualizer_listener = None
+
+        if visualizer is None:
+            return
+
+        try:
+            visualizer.setEnabled(
+                False
+            )
+        except Exception:
+            pass
+
+        try:
+            visualizer.release()
+        except Exception:
+            pass
+
+        print(
+            "811: TTS output visualizer stopped"
+        )
+
+    @mainthread
+    def on_tts_output_level(
+        self,
+        level
+    ):
+        """Drive the green speaking orb from the actual Android output audio."""
+        if not self.tts_is_speaking:
+            return
+
+        self.status_orb.set_voice_level(
+            level
+        )
+
     def speak(
         self,
         text
@@ -2466,6 +2715,10 @@ class VoiceAssistantApp(App):
                 "811: TTS speak queued successfully"
             )
 
+            # Analyze the actual audio output while this utterance plays.
+            # Failure is non-fatal: speech remains untouched.
+            self._start_tts_output_visualizer()
+
             self._tts_watch_generation += 1
             watch_generation = self._tts_watch_generation
 
@@ -2532,6 +2785,7 @@ class VoiceAssistantApp(App):
             )
 
         self.tts_is_speaking = False
+        self._stop_tts_output_visualizer()
         self._return_to_ready()
 
     def stop_speaking(
@@ -2541,6 +2795,7 @@ class VoiceAssistantApp(App):
         self._tts_pending_text = ""
         self.tts_is_speaking = False
         self._tts_watch_generation += 1
+        self._stop_tts_output_visualizer()
 
         if platform != "android":
             return
@@ -2565,6 +2820,7 @@ class VoiceAssistantApp(App):
     def _show_tts_error(
         self
     ):
+        self._stop_tts_output_visualizer()
         self.processing = False
         self.speak_btn.disabled = False
 
