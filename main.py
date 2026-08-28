@@ -1057,6 +1057,13 @@ class VoiceAssistantApp(App):
         self.processing = False
         self.ai_engine = None
 
+        # Hands-free conversation mode.
+        # One manual Talk press starts a session; after each successful 811
+        # reply finishes speaking, listening starts again automatically.
+        # Clear, manual listening stop, or an error ends the session safely.
+        self.handsfree_active = False
+        self._handsfree_generation = 0
+
         # Incremented whenever a new AI request starts or Clear cancels work.
         # Late replies from an older background request are ignored safely.
         self._request_serial = 0
@@ -3052,7 +3059,10 @@ class VoiceAssistantApp(App):
 
         self.tts_is_speaking = False
         self._stop_tts_output_visualizer()
-        self._return_to_ready()
+
+        # Successful turn complete: either continue the hands-free dialogue
+        # or return to the normal one-shot ready state.
+        self._schedule_handsfree_resume()
 
     def stop_speaking(
         self
@@ -3086,6 +3096,7 @@ class VoiceAssistantApp(App):
     def _show_tts_error(
         self
     ):
+        self._disable_handsfree()
         self._stop_tts_output_visualizer()
         self.processing = False
         self.speak_btn.disabled = False
@@ -3896,6 +3907,7 @@ class VoiceAssistantApp(App):
         )
 
         if not text:
+            self._disable_handsfree()
             self.processing = False
             self.speak_btn.disabled = False
 
@@ -3922,6 +3934,7 @@ class VoiceAssistantApp(App):
         )
 
         if not groq_key:
+            self._disable_handsfree()
             self.processing = False
             self.speak_btn.disabled = False
 
@@ -4046,6 +4059,7 @@ class VoiceAssistantApp(App):
 
         if error_code == 9:
             self._request_record_audio_permission()
+            self._disable_handsfree()
 
             self.processing = False
             self.speak_btn.disabled = False
@@ -4097,6 +4111,7 @@ class VoiceAssistantApp(App):
         # Final diagnostic error shown on screen
         # -------------------------------------------------
 
+        self._disable_handsfree()
         self.processing = False
         self.speak_btn.disabled = False
 
@@ -4195,6 +4210,80 @@ class VoiceAssistantApp(App):
             )
 
     # =====================================================
+    # HANDS-FREE SESSION
+    # =====================================================
+
+    def _enable_handsfree(
+        self
+    ):
+        self._handsfree_generation += 1
+        self.handsfree_active = True
+
+        print(
+            "811: Hands-free session enabled"
+        )
+
+    def _disable_handsfree(
+        self
+    ):
+        self._handsfree_generation += 1
+        self.handsfree_active = False
+
+        print(
+            "811: Hands-free session disabled"
+        )
+
+    def _schedule_handsfree_resume(
+        self
+    ):
+        """Restart listening shortly after a successful TTS turn."""
+        if not self.handsfree_active:
+            self._return_to_ready()
+            return
+
+        generation = self._handsfree_generation
+
+        # Brief natural gap after 811 finishes so the phone speaker/TTS tail
+        # cannot be picked up by SpeechRecognizer as the user's next phrase.
+        self._return_to_ready()
+
+        Clock.schedule_once(
+            lambda dt:
+            self._resume_handsfree_listening(
+                generation
+            ),
+            0.55
+        )
+
+    def _resume_handsfree_listening(
+        self,
+        generation
+    ):
+        if not self.handsfree_active:
+            return
+
+        if generation != self._handsfree_generation:
+            return
+
+        if self.processing:
+            return
+
+        if self.is_listening:
+            return
+
+        if self.tts_is_speaking:
+            return
+
+        if self._tts_pending_text:
+            return
+
+        print(
+            "811: Hands-free restarting listening"
+        )
+
+        self.start_listening()
+
+    # =====================================================
     # BUTTON
     # =====================================================
 
@@ -4206,6 +4295,8 @@ class VoiceAssistantApp(App):
             return
 
         if self.is_listening:
+            # Manual stop means the user wants to end the automatic dialogue.
+            self._disable_handsfree()
             self.stop_listening()
             return
 
@@ -4220,12 +4311,15 @@ class VoiceAssistantApp(App):
         )
 
         if not groq_key:
+            self._disable_handsfree()
             self.set_state(
                 "error",
                 "يرجى إدخال مفتاح Groq API أولاً."
             )
             return
 
+        # One press begins the hands-free conversation session.
+        self._enable_handsfree()
         self.start_listening()
 
     # =====================================================
@@ -4335,6 +4429,7 @@ class VoiceAssistantApp(App):
         ):
             return
 
+        self._disable_handsfree()
         self.processing = False
         self.speak_btn.disabled = False
 
@@ -4376,7 +4471,9 @@ class VoiceAssistantApp(App):
         instance
     ):
         # Clear is an emergency stop as well as a conversation reset.
-        # It must work while listening, thinking, or speaking.
+        # It must work while listening, thinking, speaking, or waiting for the
+        # next automatic hands-free turn.
+        self._disable_handsfree()
         self._request_serial += 1
         self.processing = False
         self.speak_btn.disabled = False
@@ -4415,6 +4512,8 @@ class VoiceAssistantApp(App):
     def on_stop(
         self
     ):
+        self._disable_handsfree()
+
         try:
             if self.speech_recognizer is not None:
                 self._run_on_android_ui(
