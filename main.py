@@ -1,4 +1,5 @@
 import os
+import math
 import re
 import threading
 import unicodedata
@@ -350,6 +351,9 @@ class StatusOrb(Widget):
         self.status_color = (0.13, 0.59, 0.95, 1.0)
         self.voice_level = 0.0
         self.wave_bars = None
+        self.current_state = "ready"
+        self.pulse_phase = 0.0
+        self.pulse_energy = 0.0
         self.bind(pos=self._redraw, size=self._redraw)
 
     def set_state(self, state):
@@ -360,11 +364,14 @@ class StatusOrb(Widget):
             "speaking": (0.20, 0.80, 0.30, 1.0),
             "error": (0.92, 0.20, 0.22, 1.0),
         }
+        self.current_state = state
         self.status_color = colors.get(state, colors["ready"])
 
         if state not in ("listening", "speaking"):
             self.voice_level = 0.0
             self.wave_bars = None
+            self.pulse_phase = 0.0
+            self.pulse_energy = 0.0
 
         self._redraw()
 
@@ -375,19 +382,41 @@ class StatusOrb(Widget):
         except Exception:
             target = 0.0
 
-        # Smooth motion without adding a timer:
-        # react quickly when the voice gets stronger, then fall back gently.
+        # Stronger visual sensitivity: lift quiet/medium speech so movement is
+        # clearly visible, while still clamping loud speech safely at 1.0.
+        if target > 0.0:
+            target = min(
+                1.0,
+                (target * 1.45) ** 0.68
+            )
+
+        # Quick attack + controlled release. This is intentionally more
+        # responsive than Build #137 so the motion is visibly stronger.
         if target >= self.voice_level:
-            old_weight = 0.62
-            new_weight = 0.38
+            old_weight = 0.28
+            new_weight = 0.72
         else:
-            old_weight = 0.78
-            new_weight = 0.22
+            old_weight = 0.66
+            new_weight = 0.34
 
         self.voice_level = (
             self.voice_level * old_weight
             + target * new_weight
         )
+
+        # Drive three rings outward from the core using the same real audio
+        # callbacks. No extra timer is introduced.
+        if self.current_state in ("listening", "speaking"):
+            if self.voice_level > 0.035:
+                step = 0.055 + (self.voice_level * 0.23)
+                self.pulse_phase = (
+                    self.pulse_phase + step
+                ) % 1.0
+
+            self.pulse_energy = (
+                self.pulse_energy * 0.38
+                + self.voice_level * 0.62
+            )
 
         self._redraw()
 
@@ -397,7 +426,16 @@ class StatusOrb(Widget):
 
         try:
             values = tuple(
-                max(0.0, min(1.0, float(value)))
+                min(
+                    1.0,
+                    (
+                        max(
+                            0.0,
+                            min(1.0, float(value))
+                        )
+                        * 1.55
+                    ) ** 0.66
+                )
                 for value in bars
             )
         except Exception:
@@ -417,11 +455,11 @@ class StatusOrb(Widget):
                     values
                 ):
                     if new_value >= old_value:
-                        old_weight = 0.55
-                        new_weight = 0.45
+                        old_weight = 0.24
+                        new_weight = 0.76
                     else:
-                        old_weight = 0.72
-                        new_weight = 0.28
+                        old_weight = 0.58
+                        new_weight = 0.42
 
                     smoothed_bars.append(
                         (old_value * old_weight)
@@ -448,8 +486,8 @@ class StatusOrb(Widget):
                 min(1.0, self.voice_level)
             )
 
-            # The whole voice core gently grows with real microphone loudness.
-            reactive_scale = 1.0 + (level * 0.12)
+            # Stronger core expansion so speech is visibly alive.
+            reactive_scale = 1.0 + (level * 0.19)
             radius = (
                 min(self.width, self.height)
                 * 0.27
@@ -468,37 +506,69 @@ class StatusOrb(Widget):
                 size=(radius * 3.56, radius * 3.56)
             )
 
-            # Futuristic concentric rings.
-            # Each thin ring now expands by a different amount from the same
-            # real microphone RMS level, so the rings visibly "breathe" with
-            # the user's voice instead of moving as one rigid group.
-            outer_ring = 1.66 + (level * 0.12)
-            middle_ring = 1.34 + (level * 0.09)
-            inner_ring = 1.10 + (level * 0.06)
+            # Three voice rings now EMIT from the core and travel outward.
+            # Their positions advance from the real microphone/TTS callbacks.
+            if self.current_state in ("listening", "speaking"):
+                ring_offsets = (0.0, 0.333, 0.666)
 
-            Color(
-                self.status_color[0],
-                self.status_color[1],
-                self.status_color[2],
-                0.16
-            )
-            Line(circle=(cx, cy, radius * outer_ring), width=1.25)
+                for ring_index, offset in enumerate(ring_offsets):
+                    progress = (
+                        self.pulse_phase + offset
+                    ) % 1.0
 
-            Color(
-                self.status_color[0],
-                self.status_color[1],
-                self.status_color[2],
-                0.34
-            )
-            Line(circle=(cx, cy, radius * middle_ring), width=1.45)
+                    ring_radius = radius * (
+                        1.02
+                        + (progress * 0.92)
+                        + (level * 0.08)
+                    )
 
-            Color(
-                self.status_color[0],
-                self.status_color[1],
-                self.status_color[2],
-                0.70
-            )
-            Line(circle=(cx, cy, radius * inner_ring), width=1.8)
+                    # Strong near the core, softer as the ring expands.
+                    fade = 1.0 - progress
+                    alpha = (
+                        0.10
+                        + (fade * 0.52)
+                    ) * (
+                        0.42
+                        + (self.pulse_energy * 0.78)
+                    )
+
+                    ring_width = (
+                        1.10
+                        + (fade * 1.45)
+                    )
+
+                    Color(
+                        self.status_color[0],
+                        self.status_color[1],
+                        self.status_color[2],
+                        max(0.08, min(0.78, alpha))
+                    )
+                    Line(
+                        circle=(
+                            cx,
+                            cy,
+                            ring_radius
+                        ),
+                        width=ring_width
+                    )
+
+            else:
+                # Calm static rings while idle/thinking/error.
+                for ring_radius, alpha, width in (
+                    (radius * 1.66, 0.16, 1.25),
+                    (radius * 1.34, 0.34, 1.45),
+                    (radius * 1.10, 0.70, 1.80),
+                ):
+                    Color(
+                        self.status_color[0],
+                        self.status_color[1],
+                        self.status_color[2],
+                        alpha
+                    )
+                    Line(
+                        circle=(cx, cy, ring_radius),
+                        width=width
+                    )
 
             # Main luminous voice core.
             Color(
@@ -533,30 +603,53 @@ class StatusOrb(Widget):
             if self.wave_bars is not None:
                 live_bars = self.wave_bars
             else:
-                # Listening still follows the microphone RMS scalar.
-                microphone_scale = 0.55 + (level * 1.05)
+                # Microphone gives one real RMS value. Use the pulse phase to
+                # distribute that real energy across all five lines so they
+                # visibly dance while still following the user's loudness.
+                phase = self.pulse_phase * 6.283185307179586
+                patterns = (
+                    0.62 + (0.38 * abs(math.sin(phase + 0.20))),
+                    0.58 + (0.42 * abs(math.sin(phase + 1.25))),
+                    0.55 + (0.45 * abs(math.sin(phase + 2.15))),
+                    0.58 + (0.42 * abs(math.sin(phase + 3.05))),
+                    0.62 + (0.38 * abs(math.sin(phase + 4.10))),
+                )
                 live_bars = tuple(
-                    min(1.0, microphone_scale * factor)
-                    for factor in (0.55, 0.78, 1.0, 0.78, 0.55)
+                    min(
+                        1.0,
+                        (level * 1.55) * pattern
+                    )
+                    for pattern in patterns
                 )
 
             for index, height_scale in enumerate(base_heights):
                 x = cx + (index - 2) * bar_gap
 
-                # The middle three bars have the strongest visible movement.
-                emphasis = (0.82, 1.05, 1.22, 1.05, 0.82)[index]
-                live_scale = 0.34 + (live_bars[index] * 1.10 * emphasis)
+                # All five bars now have stronger travel; the middle three
+                # remain the most expressive.
+                emphasis = (0.92, 1.15, 1.34, 1.15, 0.92)[index]
+                live_scale = (
+                    0.20
+                    + (
+                        live_bars[index]
+                        * 1.95
+                        * emphasis
+                    )
+                )
 
-                half_h = (
-                    radius
-                    * height_scale
-                    * 0.34
-                    * live_scale
+                half_h = min(
+                    radius * 0.73,
+                    (
+                        radius
+                        * height_scale
+                        * 0.36
+                        * live_scale
+                    )
                 )
 
                 Line(
                     points=[x, cy - half_h, x, cy + half_h],
-                    width=2.7
+                    width=3.0
                 )
 
 
