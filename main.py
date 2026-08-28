@@ -375,10 +375,18 @@ class StatusOrb(Widget):
         except Exception:
             target = 0.0
 
-        # Smooth tiny RMS jumps while keeping the response visibly quick.
+        # Smooth motion without adding a timer:
+        # react quickly when the voice gets stronger, then fall back gently.
+        if target >= self.voice_level:
+            old_weight = 0.62
+            new_weight = 0.38
+        else:
+            old_weight = 0.78
+            new_weight = 0.22
+
         self.voice_level = (
-            self.voice_level * 0.55
-            + target * 0.45
+            self.voice_level * old_weight
+            + target * new_weight
         )
 
         self._redraw()
@@ -399,14 +407,29 @@ class StatusOrb(Widget):
             if self.wave_bars is None:
                 self.wave_bars = values
             else:
-                # Smooth each bar independently so they move naturally
-                # without harsh flicker between audio capture frames.
-                self.wave_bars = tuple(
-                    (old_value * 0.42) + (new_value * 0.58)
-                    for old_value, new_value in zip(
-                        self.wave_bars,
-                        values
+                # Smooth each bar independently with a quick attack and
+                # a gentler release. This removes harsh jumps while keeping
+                # the waveform visibly tied to 811's real speech.
+                smoothed_bars = []
+
+                for old_value, new_value in zip(
+                    self.wave_bars,
+                    values
+                ):
+                    if new_value >= old_value:
+                        old_weight = 0.55
+                        new_weight = 0.45
+                    else:
+                        old_weight = 0.72
+                        new_weight = 0.28
+
+                    smoothed_bars.append(
+                        (old_value * old_weight)
+                        + (new_value * new_weight)
                     )
+
+                self.wave_bars = tuple(
+                    smoothed_bars
                 )
 
         self._redraw()
