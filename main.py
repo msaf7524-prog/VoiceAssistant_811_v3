@@ -321,6 +321,9 @@ def request_android_permissions():
             Permission.MODIFY_AUDIO_SETTINGS,
         ]
 
+        if hasattr(Permission, "POST_NOTIFICATIONS"):
+            permissions.append(Permission.POST_NOTIFICATIONS)
+
         if hasattr(Permission, "BLUETOOTH_CONNECT"):
             permissions.append(Permission.BLUETOOTH_CONNECT)
 
@@ -1057,6 +1060,14 @@ class VoiceAssistantApp(App):
         self.processing = False
         self.ai_engine = None
 
+        # Phase 1 background core service.
+        # This does not listen for the wake word yet. It only proves that a
+        # dedicated Android foreground service can remain alive independently
+        # of the Kivy activity while preserving the stable Build #140 UI.
+        self.background_core_started = False
+        self._background_core_start_attempt = 0
+        self._background_core_max_start_attempts = 10
+
         # Hands-free conversation mode.
         # One manual Talk press starts a session; after each successful 811
         # reply finishes speaking, listening starts again automatically.
@@ -1567,6 +1578,16 @@ class VoiceAssistantApp(App):
                 lambda dt:
                 self.init_native_speech(),
                 2.0
+            )
+
+            # Start the Phase 1 background core while the Activity is still
+            # visible. This is important for modern Android foreground-service
+            # restrictions, especially for the future microphone wake-word
+            # phase. No wake-word capture is enabled in this build yet.
+            Clock.schedule_once(
+                lambda dt:
+                self.start_background_core(),
+                3.0
             )
 
         return root
@@ -2152,6 +2173,112 @@ class VoiceAssistantApp(App):
         except Exception as exc:
             print(
                 "811: runOnUiThread error:",
+                repr(exc)
+            )
+
+    # =====================================================
+    # PHASE 1 BACKGROUND CORE SERVICE
+    # =====================================================
+
+    def start_background_core(
+        self
+    ):
+        """
+        Start the dedicated Android foreground service.
+
+        Phase 1 deliberately does NOT open the microphone or implement the
+        811 wake word. The service is only the persistent background shell
+        that later phases will build on.
+        """
+        if platform != "android":
+            return
+
+        if self.background_core_started:
+            return
+
+        # The service is declared with foregroundServiceType=microphone so the
+        # next wake-word phase can use the same stable service architecture.
+        # On modern Android, start it only after RECORD_AUDIO is granted and
+        # while this Activity is visible.
+        if not self._has_record_audio_permission():
+            self._background_core_start_attempt += 1
+
+            if (
+                self._background_core_start_attempt
+                <= self._background_core_max_start_attempts
+            ):
+                print(
+                    "811: Background core waiting for RECORD_AUDIO permission; "
+                    "attempt",
+                    self._background_core_start_attempt
+                )
+
+                Clock.schedule_once(
+                    lambda dt:
+                    self.start_background_core(),
+                    1.0
+                )
+            else:
+                print(
+                    "811: Background core not started because "
+                    "RECORD_AUDIO permission was not granted"
+                )
+
+            return
+
+        self._run_on_android_ui(
+            self._start_background_core_on_ui
+        )
+
+    def _start_background_core_on_ui(
+        self
+    ):
+        if self.background_core_started:
+            return
+
+        try:
+            from jnius import autoclass
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            activity = PythonActivity.mActivity
+
+            if activity is None:
+                raise RuntimeError(
+                    "Android Activity unavailable for Background Core"
+                )
+
+            # Generated automatically by python-for-android from:
+            # backgroundcore:background_core.py
+            ServiceBackgroundcore = autoclass(
+                "org.test.voiceassistant811."
+                "ServiceBackgroundcore"
+            )
+
+            # Empty icon name = use the application's normal icon.
+            # The notification is intentionally simple in Phase 1.
+            ServiceBackgroundcore.start(
+                activity,
+                "",
+                "Voice Assistant 811",
+                "811 Background Core ACTIVE",
+                "phase1"
+            )
+
+            self.background_core_started = True
+            self._background_core_start_attempt = 0
+
+            print(
+                "811: Background Core foreground service STARTED"
+            )
+
+        except Exception as exc:
+            self.background_core_started = False
+
+            print(
+                "811: Background Core start error:",
                 repr(exc)
             )
 
