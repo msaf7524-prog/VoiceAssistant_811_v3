@@ -1067,6 +1067,7 @@ class VoiceAssistantApp(App):
         self.background_core_started = False
         self._background_core_start_attempt = 0
         self._background_core_max_start_attempts = 10
+        self._app_is_foreground = True
 
         # Hands-free conversation mode.
         # One manual Talk press starts a session; after each successful 811
@@ -2180,6 +2181,101 @@ class VoiceAssistantApp(App):
     # PHASE 1 BACKGROUND CORE SERVICE
     # =====================================================
 
+    def _background_core_control_path(
+        self
+    ):
+        if platform != "android":
+            return None
+
+        try:
+            from jnius import autoclass
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            activity = PythonActivity.mActivity
+
+            if activity is None:
+                return None
+
+            files_dir = str(
+                activity
+                .getFilesDir()
+                .getAbsolutePath()
+            )
+
+            return os.path.join(
+                files_dir,
+                "811_background_core_control.txt"
+            )
+
+        except Exception as exc:
+            print(
+                "811: Background control path error:",
+                repr(exc)
+            )
+            return None
+
+    def _set_background_wake_capture(
+        self,
+        enabled,
+        reason
+    ):
+        """
+        Tell the separate background service whether it may own the microphone.
+
+        Phase 2A uses a tiny private control file because the service runs in a
+        separate Android process. This avoids competing with the existing
+        SpeechRecognizer while the Kivy Activity is active.
+        """
+        if platform != "android":
+            return
+
+        path = self._background_core_control_path()
+
+        if not path:
+            return
+
+        try:
+            temp_path = path + ".tmp"
+
+            payload = (
+                ("capture" if enabled else "pause")
+                + "\n"
+                + str(reason)
+                + "\n"
+                + str(time.time())
+                + "\n"
+            )
+
+            with open(
+                temp_path,
+                "w",
+                encoding="utf-8"
+            ) as handle:
+                handle.write(
+                    payload
+                )
+
+            os.replace(
+                temp_path,
+                path
+            )
+
+            print(
+                "811: Background wake capture:",
+                "ON" if enabled else "PAUSED",
+                "|",
+                reason
+            )
+
+        except Exception as exc:
+            print(
+                "811: Background control write error:",
+                repr(exc)
+            )
+
     def start_background_core(
         self
     ):
@@ -2269,6 +2365,13 @@ class VoiceAssistantApp(App):
 
             self.background_core_started = True
             self._background_core_start_attempt = 0
+
+            # The foreground Activity owns the voice pipeline. Keep the
+            # background AudioRecord paused until the app goes to background.
+            self._set_background_wake_capture(
+                False,
+                "app_foreground"
+            )
 
             print(
                 "811: Background Core foreground service STARTED"
@@ -4633,6 +4736,50 @@ class VoiceAssistantApp(App):
         self.key_input.focus = False
 
     # =====================================================
+    # APP BACKGROUND / FOREGROUND
+    # =====================================================
+
+    def on_pause(
+        self
+    ):
+        self._app_is_foreground = False
+
+        # Phase 2A only gives the service the microphone when there is no
+        # active hands-free/voice turn. This protects the stable recognizer.
+        safe_to_capture = (
+            not self.handsfree_active
+            and not self.processing
+            and not self.is_listening
+            and not self.tts_is_speaking
+            and not self._tts_pending_text
+        )
+
+        self._set_background_wake_capture(
+            safe_to_capture,
+            (
+                "app_background_idle"
+                if safe_to_capture
+                else "app_background_voice_session"
+            )
+        )
+
+        # Returning True lets Kivy pause normally while keeping the Android
+        # foreground service alive.
+        return True
+
+    def on_resume(
+        self
+    ):
+        self._app_is_foreground = True
+
+        # Release the service microphone before the user interacts with the
+        # foreground SpeechRecognizer.
+        self._set_background_wake_capture(
+            False,
+            "app_foreground"
+        )
+
+    # =====================================================
     # STOP
     # =====================================================
 
@@ -4663,6 +4810,12 @@ class VoiceAssistantApp(App):
                 "811: TTS shutdown error:",
                 repr(exc)
             )
+
+        self._app_is_foreground = False
+        self._set_background_wake_capture(
+            True,
+            "app_stopped"
+        )
 
         super().on_stop()
 
