@@ -1,4 +1,5 @@
 import os
+import json
 import math
 import re
 import threading
@@ -1068,6 +1069,12 @@ class VoiceAssistantApp(App):
         self._background_core_start_attempt = 0
         self._background_core_max_start_attempts = 10
         self._app_is_foreground = True
+
+        # Phase 2B diagnostic: once per app session, when the app first moves
+        # safely to the background, ask the service itself to speak a short
+        # Arabic phrase. This proves TTS can run independently from Kivy.
+        self._background_tts_probe_sent = False
+        self._background_command_serial = 0
 
         # Hands-free conversation mode.
         # One manual Talk press starts a session; after each successful 811
@@ -2216,6 +2223,91 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
             return None
+
+    def _background_core_command_path(
+        self
+    ):
+        control_path = (
+            self._background_core_control_path()
+        )
+
+        if not control_path:
+            return None
+
+        return os.path.join(
+            os.path.dirname(control_path),
+            "811_background_core_command.json"
+        )
+
+    def _send_background_core_command(
+        self,
+        action,
+        **payload
+    ):
+        """
+        Send a one-shot command to the separate Background Core process.
+
+        Commands are written atomically to the app-private files directory.
+        The service ignores command IDs it has already handled.
+        """
+        if platform != "android":
+            return False
+
+        path = (
+            self._background_core_command_path()
+        )
+
+        if not path:
+            return False
+
+        try:
+            self._background_command_serial += 1
+
+            command = {
+                "id": (
+                    str(int(time.time() * 1000))
+                    + "-"
+                    + str(self._background_command_serial)
+                ),
+                "action": str(action),
+                "created_at": time.time(),
+            }
+
+            command.update(
+                payload
+            )
+
+            temp_path = path + ".tmp"
+
+            with open(
+                temp_path,
+                "w",
+                encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    command,
+                    handle,
+                    ensure_ascii=False
+                )
+
+            os.replace(
+                temp_path,
+                path
+            )
+
+            print(
+                "811: Background command sent:",
+                action
+            )
+
+            return True
+
+        except Exception as exc:
+            print(
+                "811: Background command write error:",
+                repr(exc)
+            )
+            return False
 
     def _set_background_wake_capture(
         self,
@@ -4762,6 +4854,24 @@ class VoiceAssistantApp(App):
                 else "app_background_voice_session"
             )
         )
+
+        # Phase 2B: one controlled proof that the SERVICE can speak while the
+        # Kivy Activity is paused. It runs only once per app session and only
+        # when no foreground voice turn is active.
+        if (
+            safe_to_capture
+            and not self._background_tts_probe_sent
+        ):
+            sent = self._send_background_core_command(
+                "tts_probe",
+                text=(
+                    "أنا 811. "
+                    "التشغيل في الخلفية جاهز."
+                )
+            )
+
+            if sent:
+                self._background_tts_probe_sent = True
 
         # Returning True lets Kivy pause normally while keeping the Android
         # foreground service alive.
