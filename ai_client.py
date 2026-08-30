@@ -120,6 +120,58 @@ class AIClient:
     # PUBLIC API
     # =========================================================
 
+    def provider_available(
+        self,
+        provider
+    ):
+        provider = str(
+            provider or ""
+        ).strip().lower()
+
+        if provider == "gemini":
+            return bool(
+                self.gemini_key
+            )
+
+        if provider == "groq":
+            return bool(
+                self.groq_key
+            )
+
+        return False
+
+    def select_provider(
+        self,
+        provider
+    ):
+        """
+        Select Gemini or Groq explicitly.
+        Returns True only when that provider has a usable bundled/runtime key.
+        """
+        provider = str(
+            provider or ""
+        ).strip().lower()
+
+        if provider not in (
+            "gemini",
+            "groq"
+        ):
+            return False
+
+        if not self.provider_available(
+            provider
+        ):
+            return False
+
+        self.provider = provider
+
+        print(
+            "811: AI provider selected:",
+            provider
+        )
+
+        return True
+
     def get_default_api_key(
         self
     ):

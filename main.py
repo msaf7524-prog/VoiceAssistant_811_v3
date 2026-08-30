@@ -1286,63 +1286,71 @@ class VoiceAssistantApp(App):
         )
 
         # =================================================
-        # AI API KEY (Groq / Gemini)
+        # AI PROVIDER SELECTOR
         # =================================================
 
-        key_container = BoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            height=dp(72),
-            padding=dp(4)
-        )
+        self.ai_provider_choice = "gemini"
 
-        self.key_input = TextInput(
-            hint_text="AI API Key (Groq / Gemini)",
-            multiline=False,
-            password=True,
-            font_size="14sp",
-            font_name="Roboto",
-            foreground_color=(
-                0.90,
-                0.93,
-                0.98,
-                1.0
-            ),
-            background_color=(
-                0.08,
-                0.10,
-                0.14,
-                1.0
-            ),
-            cursor_color=(
-                0.25,
-                0.65,
-                1.0,
-                1.0
-            ),
+        provider_container = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(52),
+            spacing=dp(8),
             padding=(
-                dp(14),
-                dp(12)
+                dp(4),
+                dp(4)
             )
         )
 
-        self.key_input.bind(
-            focus=self._on_api_key_focus
+        self.gemini_btn = Button(
+            text="Gemini",
+            font_name="Roboto",
+            font_size="14sp",
+            background_normal="",
+            background_down="",
+            color=(1, 1, 1, 1)
         )
 
-        key_container.add_widget(
-            self.key_input
+        self.groq_btn = Button(
+            text="Groq",
+            font_name="Roboto",
+            font_size="14sp",
+            background_normal="",
+            background_down="",
+            color=(1, 1, 1, 1)
+        )
+
+        self.gemini_btn.bind(
+            on_release=lambda instance:
+            self._select_ai_provider(
+                "gemini"
+            )
+        )
+
+        self.groq_btn.bind(
+            on_release=lambda instance:
+            self._select_ai_provider(
+                "groq"
+            )
+        )
+
+        provider_container.add_widget(
+            self.gemini_btn
+        )
+
+        provider_container.add_widget(
+            self.groq_btn
         )
 
         main.add_widget(
-            key_container
+            provider_container
         )
 
-        # Restore the key from Android private app storage. The key never goes
-        # into GitHub/source code and remains hidden by password=True.
+        # Keys stay hidden inside the APK and are generated from GitHub
+        # Actions Secrets. The user only chooses the active provider.
         Clock.schedule_once(
             lambda dt:
-            self._load_saved_api_key(),
+            self._load_provider_choice(),
             0.35
         )
 
@@ -1538,7 +1546,7 @@ class VoiceAssistantApp(App):
                 "Speech Recognition • "
                 "Native TTS • "
                 "Cairo Arabic • "
-                "Groq AI"
+                "AI"
             ),
             font_name="Roboto",
             font_size="11sp",
@@ -2197,7 +2205,7 @@ class VoiceAssistantApp(App):
             )
 
     # =====================================================
-    # PRIVATE AI KEY STORAGE
+    # AI PROVIDER PREFERENCE
     # =====================================================
 
     def _api_preferences(
@@ -2213,9 +2221,7 @@ class VoiceAssistantApp(App):
                 "org.kivy.android.PythonActivity"
             )
 
-            activity = (
-                PythonActivity.mActivity
-            )
+            activity = PythonActivity.mActivity
 
             if activity is None:
                 return None
@@ -2230,190 +2236,246 @@ class VoiceAssistantApp(App):
 
         except Exception as exc:
             print(
-                "811: API preferences error:",
+                "811: AI preferences error:",
                 repr(exc)
             )
             return None
 
-    def _provider_for_key(
+    def _provider_is_available(
         self,
-        api_key
+        provider
     ):
+        if self.ai_engine is None:
+            return False
+
         try:
-            return (
-                AIClient
-                .identify_provider(
-                    api_key
+            return bool(
+                self.ai_engine
+                .provider_available(
+                    provider
                 )
             )
-        except Exception:
-            key = str(
-                api_key or ""
-            ).strip()
-
-            if key.lower().startswith(
-                "gsk_"
-            ):
-                return "groq"
-
-            return (
-                "gemini"
-                if key
-                else ""
+        except Exception as exc:
+            print(
+                "811: Provider availability error:",
+                repr(exc)
             )
+            return False
 
-    def _load_saved_api_key(
-        self
+    def _save_provider_choice(
+        self,
+        provider
     ):
-        prefs = (
-            self._api_preferences()
-        )
+        prefs = self._api_preferences()
 
         if prefs is None:
             return
 
         try:
-            saved_key = str(
-                prefs.getString(
-                    "ai_api_key",
-                    ""
-                )
-                or ""
-            ).strip()
-
-            if not saved_key:
-                # Personal-build mode: GitHub Actions may have bundled the
-                # repository Secrets into the APK at build time. Prefer Gemini
-                # when both keys are available. Keep the field masked.
-                try:
-                    saved_key = (
-                        self.ai_engine
-                        .get_default_api_key()
-                        if self.ai_engine is not None
-                        else ""
-                    )
-                except Exception as exc:
-                    print(
-                        "811: Bundled AI key lookup error:",
-                        repr(exc)
-                    )
-                    saved_key = ""
-
-                if not saved_key:
-                    return
-
-                print(
-                    "811: Bundled AI key available"
-                )
-
-            self.key_input.text = (
-                saved_key
+            editor = prefs.edit()
+            editor.putString(
+                "ai_provider_choice",
+                provider
             )
-
-            provider = (
-                self._provider_for_key(
-                    saved_key
-                )
-            )
-
-            if (
-                self.ai_engine
-                is not None
-            ):
-                self.ai_engine.set_api_key(
-                    saved_key
-                )
-
-            print(
-                "811: Saved AI key restored | provider:",
-                provider or "unknown"
-            )
+            editor.apply()
 
         except Exception as exc:
             print(
-                "811: Saved AI key load error:",
+                "811: Provider choice save error:",
                 repr(exc)
             )
 
-    def _save_api_key(
-        self,
-        api_key
+    def _load_provider_choice(
+        self
     ):
-        key = str(
-            api_key or ""
-        ).strip()
+        preferred = "gemini"
 
-        if not key:
-            return False
+        prefs = self._api_preferences()
 
-        prefs = (
-            self._api_preferences()
+        if prefs is not None:
+            try:
+                saved = str(
+                    prefs.getString(
+                        "ai_provider_choice",
+                        ""
+                    )
+                    or ""
+                ).strip().lower()
+
+                if saved in (
+                    "gemini",
+                    "groq"
+                ):
+                    preferred = saved
+
+            except Exception as exc:
+                print(
+                    "811: Provider choice load error:",
+                    repr(exc)
+                )
+
+        if not self._provider_is_available(
+            preferred
+        ):
+            alternative = (
+                "groq"
+                if preferred == "gemini"
+                else "gemini"
+            )
+
+            if self._provider_is_available(
+                alternative
+            ):
+                preferred = alternative
+
+        self._select_ai_provider(
+            preferred,
+            save=False,
+            announce=False
         )
 
-        if prefs is None:
+    def _refresh_provider_ui(
+        self
+    ):
+        active = self.ai_provider_choice
+
+        active_color = (
+            0.13,
+            0.59,
+            0.95,
+            1.0
+        )
+
+        inactive_color = (
+            0.12,
+            0.14,
+            0.18,
+            1.0
+        )
+
+        self.gemini_btn.background_color = (
+            active_color
+            if active == "gemini"
+            else inactive_color
+        )
+
+        self.groq_btn.background_color = (
+            active_color
+            if active == "groq"
+            else inactive_color
+        )
+
+        if hasattr(
+            self,
+            "footer_label"
+        ):
+            provider_name = (
+                "Gemini"
+                if active == "gemini"
+                else "Groq"
+            )
+
+            self.footer_label.text = (
+                "Speech Recognition • "
+                "Native TTS • "
+                "Cairo Arabic • "
+                + provider_name
+            )
+
+    def _select_ai_provider(
+        self,
+        provider,
+        save=True,
+        announce=True
+    ):
+        provider = str(
+            provider or ""
+        ).strip().lower()
+
+        if provider not in (
+            "gemini",
+            "groq"
+        ):
+            return False
+
+        if (
+            self.processing
+            or self.is_listening
+            or self.tts_is_speaking
+        ):
+            return False
+
+        if self.ai_engine is None:
+            self.set_state(
+                "error",
+                "تعذر تهيئة محرك الذكاء الاصطناعي."
+            )
             return False
 
         try:
-            provider = (
-                self._provider_for_key(
-                    key
+            selected = (
+                self.ai_engine
+                .select_provider(
+                    provider
                 )
             )
+        except Exception as exc:
+            print(
+                "811: Provider select error:",
+                repr(exc)
+            )
+            selected = False
 
-            editor = prefs.edit()
-
-            editor.putString(
-                "ai_api_key",
-                key
+        if not selected:
+            provider_name = (
+                "Gemini"
+                if provider == "gemini"
+                else "Groq"
             )
 
-            editor.putString(
-                "ai_provider",
+            if announce:
+                self.set_state(
+                    "error",
+                    (
+                        "مفتاح "
+                        + provider_name
+                        + " غير متوفر في هذه النسخة."
+                    )
+                )
+
+                Clock.schedule_once(
+                    lambda dt:
+                    self._return_to_ready(),
+                    2.0
+                )
+
+            return False
+
+        self.ai_provider_choice = provider
+
+        if save:
+            self._save_provider_choice(
                 provider
             )
 
-            editor.apply()
+        self._refresh_provider_ui()
 
-            if (
-                self.ai_engine
-                is not None
-            ):
-                self.ai_engine.set_api_key(
-                    key
+        if announce:
+            provider_name = (
+                "Gemini"
+                if provider == "gemini"
+                else "Groq"
+            )
+
+            self.set_state(
+                "ready",
+                (
+                    "تم اختيار "
+                    + provider_name
                 )
-
-            print(
-                "811: AI key saved privately | provider:",
-                provider or "unknown"
             )
 
-            return True
-
-        except Exception as exc:
-            print(
-                "811: AI key save error:",
-                repr(exc)
-            )
-            return False
-
-    def _on_api_key_focus(
-        self,
-        instance,
-        focused
-    ):
-        if focused:
-            return
-
-        key = (
-            self.key_input
-            .text
-            .strip()
-        )
-
-        if key:
-            self._save_api_key(
-                key
-            )
+        return True
 
     # =====================================================
     # PHASE 1 BACKGROUND CORE SERVICE
@@ -4480,26 +4542,30 @@ class VoiceAssistantApp(App):
             text
         )
 
-        api_key = (
-            self.key_input
-            .text
-            .strip()
-        )
+        provider = self.ai_provider_choice
 
-        if not api_key:
+        if not self._provider_is_available(
+            provider
+        ):
             self._disable_handsfree()
             self.processing = False
             self.speak_btn.disabled = False
 
+            provider_name = (
+                "Gemini"
+                if provider == "gemini"
+                else "Groq"
+            )
+
             self.set_state(
                 "error",
-                "أدخل مفتاح AI أولاً."
+                (
+                    "مفتاح "
+                    + provider_name
+                    + " غير متوفر."
+                )
             )
             return
-
-        self._save_api_key(
-            api_key
-        )
 
         self.processing = True
         self.speak_btn.disabled = True
@@ -4514,7 +4580,7 @@ class VoiceAssistantApp(App):
             target=self.process_user_text,
             args=(
                 text,
-                api_key,
+                provider,
                 request_serial
             ),
             daemon=True
@@ -4861,23 +4927,28 @@ class VoiceAssistantApp(App):
         if self.tts_is_speaking or self._tts_pending_text:
             return
 
-        api_key = (
-            self.key_input
-            .text
-            .strip()
-        )
+        provider = self.ai_provider_choice
 
-        if not api_key:
+        if not self._provider_is_available(
+            provider
+        ):
             self._disable_handsfree()
+
+            provider_name = (
+                "Gemini"
+                if provider == "gemini"
+                else "Groq"
+            )
+
             self.set_state(
                 "error",
-                "يرجى إدخال مفتاح AI أولاً."
+                (
+                    "مفتاح "
+                    + provider_name
+                    + " غير متوفر."
+                )
             )
             return
-
-        self._save_api_key(
-            api_key
-        )
 
         # One press begins the hands-free conversation session.
         self._enable_handsfree()
@@ -4890,7 +4961,7 @@ class VoiceAssistantApp(App):
     def process_user_text(
         self,
         user_text,
-        api_key,
+        provider,
         request_serial
     ):
         try:
@@ -4904,16 +4975,21 @@ class VoiceAssistantApp(App):
                 )
                 return
 
-            provider = (
+            if not (
                 self.ai_engine
-                .set_api_key(
-                    api_key
+                .select_provider(
+                    provider
                 )
-            )
+            ):
+                self.update_error(
+                    "مزود الذكاء الاصطناعي المختار غير متوفر.",
+                    request_serial
+                )
+                return
 
             print(
                 "811: AI provider for request:",
-                provider or "unknown"
+                provider
             )
 
             response = (
@@ -5071,8 +5147,6 @@ class VoiceAssistantApp(App):
         self.set_state(
             "ready"
         )
-
-        self.key_input.focus = False
 
     # =====================================================
     # APP BACKGROUND / FOREGROUND
