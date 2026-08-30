@@ -2282,7 +2282,29 @@ class VoiceAssistantApp(App):
             ).strip()
 
             if not saved_key:
-                return
+                # Personal-build mode: GitHub Actions may have bundled the
+                # repository Secrets into the APK at build time. Prefer Gemini
+                # when both keys are available. Keep the field masked.
+                try:
+                    saved_key = (
+                        self.ai_engine
+                        .get_default_api_key()
+                        if self.ai_engine is not None
+                        else ""
+                    )
+                except Exception as exc:
+                    print(
+                        "811: Bundled AI key lookup error:",
+                        repr(exc)
+                    )
+                    saved_key = ""
+
+                if not saved_key:
+                    return
+
+                print(
+                    "811: Bundled AI key available"
+                )
 
             self.key_input.text = (
                 saved_key

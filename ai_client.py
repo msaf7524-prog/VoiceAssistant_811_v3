@@ -3,6 +3,17 @@ import re
 import datetime
 import requests
 
+# GitHub Actions creates app_secrets.py only inside the build workspace.
+# It is packaged into the APK but is never committed to the public repository.
+try:
+    from app_secrets import (
+        GEMINI_API_KEY as BUNDLED_GEMINI_API_KEY,
+        GROQ_API_KEY as BUNDLED_GROQ_API_KEY,
+    )
+except Exception:
+    BUNDLED_GEMINI_API_KEY = ""
+    BUNDLED_GROQ_API_KEY = ""
+
 
 class AIClient:
     """
@@ -27,12 +38,14 @@ class AIClient:
         self.groq_key = (
             groq_key
             or os.environ.get("GROQ_API_KEY", "")
+            or BUNDLED_GROQ_API_KEY
         ).strip()
 
         self.gemini_key = (
             gemini_key
             or os.environ.get("GEMINI_API_KEY", "")
             or os.environ.get("GOOGLE_API_KEY", "")
+            or BUNDLED_GEMINI_API_KEY
         ).strip()
 
         self.provider = str(
@@ -106,6 +119,29 @@ class AIClient:
     # =========================================================
     # PUBLIC API
     # =========================================================
+
+    def get_default_api_key(
+        self
+    ):
+        """
+        Return the preferred built-in/runtime key without exposing it in logs.
+        Gemini is preferred when both providers are available.
+        """
+        if self.gemini_key:
+            return self.gemini_key
+
+        if self.groq_key:
+            return self.groq_key
+
+        return ""
+
+    def has_bundled_keys(
+        self
+    ):
+        return bool(
+            BUNDLED_GEMINI_API_KEY
+            or BUNDLED_GROQ_API_KEY
+        )
 
     @staticmethod
     def identify_provider(
