@@ -1286,7 +1286,7 @@ class VoiceAssistantApp(App):
         )
 
         # =================================================
-        # GROQ
+        # AI API KEY (Groq / Gemini)
         # =================================================
 
         key_container = BoxLayout(
@@ -1297,7 +1297,7 @@ class VoiceAssistantApp(App):
         )
 
         self.key_input = TextInput(
-            hint_text="Groq API Key",
+            hint_text="AI API Key (Groq / Gemini)",
             multiline=False,
             password=True,
             font_size="14sp",
@@ -1326,12 +1326,24 @@ class VoiceAssistantApp(App):
             )
         )
 
+        self.key_input.bind(
+            focus=self._on_api_key_focus
+        )
+
         key_container.add_widget(
             self.key_input
         )
 
         main.add_widget(
             key_container
+        )
+
+        # Restore the key from Android private app storage. The key never goes
+        # into GitHub/source code and remains hidden by password=True.
+        Clock.schedule_once(
+            lambda dt:
+            self._load_saved_api_key(),
+            0.35
         )
 
         # =================================================
@@ -2182,6 +2194,203 @@ class VoiceAssistantApp(App):
             print(
                 "811: runOnUiThread error:",
                 repr(exc)
+            )
+
+    # =====================================================
+    # PRIVATE AI KEY STORAGE
+    # =====================================================
+
+    def _api_preferences(
+        self
+    ):
+        if platform != "android":
+            return None
+
+        try:
+            from jnius import autoclass
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            activity = (
+                PythonActivity.mActivity
+            )
+
+            if activity is None:
+                return None
+
+            return (
+                activity
+                .getSharedPreferences(
+                    "voice_assistant_811_private",
+                    0
+                )
+            )
+
+        except Exception as exc:
+            print(
+                "811: API preferences error:",
+                repr(exc)
+            )
+            return None
+
+    def _provider_for_key(
+        self,
+        api_key
+    ):
+        try:
+            return (
+                AIClient
+                .identify_provider(
+                    api_key
+                )
+            )
+        except Exception:
+            key = str(
+                api_key or ""
+            ).strip()
+
+            if key.lower().startswith(
+                "gsk_"
+            ):
+                return "groq"
+
+            return (
+                "gemini"
+                if key
+                else ""
+            )
+
+    def _load_saved_api_key(
+        self
+    ):
+        prefs = (
+            self._api_preferences()
+        )
+
+        if prefs is None:
+            return
+
+        try:
+            saved_key = str(
+                prefs.getString(
+                    "ai_api_key",
+                    ""
+                )
+                or ""
+            ).strip()
+
+            if not saved_key:
+                return
+
+            self.key_input.text = (
+                saved_key
+            )
+
+            provider = (
+                self._provider_for_key(
+                    saved_key
+                )
+            )
+
+            if (
+                self.ai_engine
+                is not None
+            ):
+                self.ai_engine.set_api_key(
+                    saved_key
+                )
+
+            print(
+                "811: Saved AI key restored | provider:",
+                provider or "unknown"
+            )
+
+        except Exception as exc:
+            print(
+                "811: Saved AI key load error:",
+                repr(exc)
+            )
+
+    def _save_api_key(
+        self,
+        api_key
+    ):
+        key = str(
+            api_key or ""
+        ).strip()
+
+        if not key:
+            return False
+
+        prefs = (
+            self._api_preferences()
+        )
+
+        if prefs is None:
+            return False
+
+        try:
+            provider = (
+                self._provider_for_key(
+                    key
+                )
+            )
+
+            editor = prefs.edit()
+
+            editor.putString(
+                "ai_api_key",
+                key
+            )
+
+            editor.putString(
+                "ai_provider",
+                provider
+            )
+
+            editor.apply()
+
+            if (
+                self.ai_engine
+                is not None
+            ):
+                self.ai_engine.set_api_key(
+                    key
+                )
+
+            print(
+                "811: AI key saved privately | provider:",
+                provider or "unknown"
+            )
+
+            return True
+
+        except Exception as exc:
+            print(
+                "811: AI key save error:",
+                repr(exc)
+            )
+            return False
+
+    def _on_api_key_focus(
+        self,
+        instance,
+        focused
+    ):
+        if focused:
+            return
+
+        key = (
+            self.key_input
+            .text
+            .strip()
+        )
+
+        if key:
+            self._save_api_key(
+                key
             )
 
     # =====================================================
@@ -4249,22 +4458,26 @@ class VoiceAssistantApp(App):
             text
         )
 
-        groq_key = (
+        api_key = (
             self.key_input
             .text
             .strip()
         )
 
-        if not groq_key:
+        if not api_key:
             self._disable_handsfree()
             self.processing = False
             self.speak_btn.disabled = False
 
             self.set_state(
                 "error",
-                "أدخل مفتاح Groq أولاً."
+                "أدخل مفتاح AI أولاً."
             )
             return
+
+        self._save_api_key(
+            api_key
+        )
 
         self.processing = True
         self.speak_btn.disabled = True
@@ -4279,7 +4492,7 @@ class VoiceAssistantApp(App):
             target=self.process_user_text,
             args=(
                 text,
-                groq_key,
+                api_key,
                 request_serial
             ),
             daemon=True
@@ -4626,19 +4839,23 @@ class VoiceAssistantApp(App):
         if self.tts_is_speaking or self._tts_pending_text:
             return
 
-        groq_key = (
+        api_key = (
             self.key_input
             .text
             .strip()
         )
 
-        if not groq_key:
+        if not api_key:
             self._disable_handsfree()
             self.set_state(
                 "error",
-                "يرجى إدخال مفتاح Groq API أولاً."
+                "يرجى إدخال مفتاح AI أولاً."
             )
             return
+
+        self._save_api_key(
+            api_key
+        )
 
         # One press begins the hands-free conversation session.
         self._enable_handsfree()
@@ -4651,7 +4868,7 @@ class VoiceAssistantApp(App):
     def process_user_text(
         self,
         user_text,
-        groq_key,
+        api_key,
         request_serial
     ):
         try:
@@ -4665,8 +4882,16 @@ class VoiceAssistantApp(App):
                 )
                 return
 
-            self.ai_engine.groq_key = (
-                groq_key
+            provider = (
+                self.ai_engine
+                .set_api_key(
+                    api_key
+                )
+            )
+
+            print(
+                "811: AI provider for request:",
+                provider or "unknown"
             )
 
             response = (

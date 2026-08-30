@@ -5,21 +5,43 @@ import requests
 
 
 class AIClient:
-    """Small, defensive Groq chat client used by Voice Assistant 811."""
+    """
+    Defensive multi-provider AI client for Voice Assistant 811.
 
-    def __init__(self, groq_key=None, gemini_key=None):
+    Providers:
+    - Gemini 3.7 Flash (preferred when a Gemini key is entered)
+    - Groq (kept fully compatible as a fallback / existing provider)
+
+    No API key is hard-coded in source control.
+    """
+
+    GEMINI_PRIMARY_MODEL = "gemini-3.7-flash"
+    GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite"
+
+    def __init__(
+        self,
+        groq_key=None,
+        gemini_key=None,
+        provider="auto"
+    ):
         self.groq_key = (
             groq_key
             or os.environ.get("GROQ_API_KEY", "")
         ).strip()
 
-        # Kept for backward compatibility with the current app.
         self.gemini_key = (
             gemini_key
             or os.environ.get("GEMINI_API_KEY", "")
+            or os.environ.get("GOOGLE_API_KEY", "")
         ).strip()
 
-        self.groq_base_url = "https://api.groq.com/openai/v1"
+        self.provider = str(
+            provider or "auto"
+        ).strip().lower()
+
+        self.groq_base_url = (
+            "https://api.groq.com/openai/v1"
+        )
         self.groq_chat_url = (
             self.groq_base_url
             + "/chat/completions"
@@ -27,6 +49,13 @@ class AIClient:
         self.groq_models_url = (
             self.groq_base_url
             + "/models"
+        )
+
+        self.gemini_base_url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+        )
+        self.gemini_model = (
+            self.GEMINI_PRIMARY_MODEL
         )
 
         # Quality first. Faster/smaller models remain as fallbacks.
@@ -39,7 +68,10 @@ class AIClient:
 
         self.groq_model = None
 
-        today = datetime.date.today().isoformat()
+        today = (
+            datetime.date.today()
+            .isoformat()
+        )
 
         self.system_instruction = (
             "أنت 811، مساعد شخصي ذكي للمستخدم. "
@@ -64,21 +96,471 @@ class AIClient:
             }
         ]
 
+        # If a constructor key is already available, resolve provider now.
+        if self.provider == "auto":
+            if self.gemini_key:
+                self.provider = "gemini"
+            elif self.groq_key:
+                self.provider = "groq"
+
     # =========================================================
     # PUBLIC API
     # =========================================================
 
-    def get_response(self, user_text):
+    @staticmethod
+    def identify_provider(
+        api_key
+    ):
+        """
+        Detect the provider without exposing/logging the key.
+
+        Groq keys use the gsk_ prefix. Gemini/Google keys have changed forms
+        over time, so every non-Groq key is treated as Gemini.
+        """
+        key = str(
+            api_key or ""
+        ).strip()
+
+        if not key:
+            return ""
+
+        if key.lower().startswith(
+            "gsk_"
+        ):
+            return "groq"
+
+        return "gemini"
+
+    def set_api_key(
+        self,
+        api_key
+    ):
+        key = str(
+            api_key or ""
+        ).strip()
+
+        provider = (
+            self.identify_provider(
+                key
+            )
+        )
+
+        if provider == "groq":
+            self.groq_key = key
+            self.provider = "groq"
+
+        elif provider == "gemini":
+            self.gemini_key = key
+            self.provider = "gemini"
+
+        return provider
+
+    def get_provider_name(
+        self
+    ):
+        if self.provider == "gemini":
+            return "Gemini"
+
+        if self.provider == "groq":
+            return "Groq"
+
+        return "AI"
+
+    def get_response(
+        self,
+        user_text
+    ):
         user_text = self._clean_text(
             user_text
         )
 
         if not user_text:
-            return "لم أسمع أو أستلم نصاً واضحاً."
+            return (
+                "لم أسمع أو أستلم نصاً واضحاً."
+            )
 
-        if not self.groq_key:
-            return "مفتاح Groq API غير موجود."
+        provider = self.provider
 
+        if provider == "auto":
+            if self.gemini_key:
+                provider = "gemini"
+            elif self.groq_key:
+                provider = "groq"
+
+        if provider == "gemini":
+            if not self.gemini_key:
+                return (
+                    "مفتاح Gemini API غير موجود."
+                )
+
+            return self._get_gemini_response(
+                user_text
+            )
+
+        if provider == "groq":
+            if not self.groq_key:
+                return (
+                    "مفتاح Groq API غير موجود."
+                )
+
+            return self._get_groq_response(
+                user_text
+            )
+
+        return (
+            "مفتاح الذكاء الاصطناعي غير موجود."
+        )
+
+    def clear_history(
+        self
+    ):
+        self.history = [
+            {
+                "role": "system",
+                "content": self.system_instruction,
+            }
+        ]
+
+    # =========================================================
+    # GEMINI 3.7 FLASH
+    # =========================================================
+
+    def _get_gemini_response(
+        self,
+        user_text
+    ):
+        try:
+            result = self._call_gemini(
+                user_text,
+                self.gemini_model
+            )
+
+            if result["success"]:
+                return result["text"]
+
+            error_text = (
+                result["error"]
+                or ""
+            )
+
+            low = error_text.lower()
+
+            # If the primary model is temporarily unavailable on the account,
+            # use the lightweight current Gemini fallback exactly once.
+            if (
+                self.gemini_model
+                != self.GEMINI_FALLBACK_MODEL
+                and (
+                    "404" in low
+                    or "not found" in low
+                    or "not supported" in low
+                )
+            ):
+                fallback = (
+                    self.GEMINI_FALLBACK_MODEL
+                )
+
+                print(
+                    "811: Gemini primary unavailable; "
+                    "trying fallback model:",
+                    fallback
+                )
+
+                retry_result = (
+                    self._call_gemini(
+                        user_text,
+                        fallback
+                    )
+                )
+
+                if retry_result["success"]:
+                    self.gemini_model = fallback
+                    return retry_result["text"]
+
+                error_text = (
+                    retry_result["error"]
+                )
+
+            return (
+                "حدث خطأ أثناء الاتصال بـ Gemini.\n"
+                + error_text
+            ).strip()
+
+        except Exception as exc:
+            print(
+                "811: Gemini client fatal error:",
+                type(exc).__name__,
+                repr(exc)
+            )
+
+            return (
+                "تعذر إكمال الطلب حالياً. "
+                "حاول مرة أخرى بعد قليل."
+            )
+
+    def _call_gemini(
+        self,
+        user_text,
+        model
+    ):
+        contents = []
+
+        # Convert the same compact 811 history to Gemini roles.
+        for item in self.history:
+            role = item.get(
+                "role",
+                ""
+            )
+
+            if role == "system":
+                continue
+
+            if role == "assistant":
+                gemini_role = "model"
+            elif role == "user":
+                gemini_role = "user"
+            else:
+                continue
+
+            content = self._clean_text(
+                item.get(
+                    "content",
+                    ""
+                )
+            )
+
+            if not content:
+                continue
+
+            contents.append(
+                {
+                    "role": gemini_role,
+                    "parts": [
+                        {
+                            "text": content
+                        }
+                    ],
+                }
+            )
+
+        contents.append(
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": user_text
+                    }
+                ],
+            }
+        )
+
+        # Keep enough context for continuity without letting mobile payloads
+        # grow forever.
+        if len(contents) > 12:
+            contents = contents[-12:]
+
+        payload = {
+            "systemInstruction": {
+                "parts": [
+                    {
+                        "text": self.system_instruction
+                    }
+                ]
+            },
+            "contents": contents,
+            "generationConfig": {
+                "maxOutputTokens": 900
+            },
+        }
+
+        url = (
+            self.gemini_base_url
+            + str(model)
+            + ":generateContent"
+        )
+
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "x-goog-api-key": (
+                        self.gemini_key
+                    ),
+                    "Content-Type": (
+                        "application/json"
+                    ),
+                    "Accept": (
+                        "application/json"
+                    ),
+                    "x-goog-api-client": (
+                        "voice-assistant-811/0.3.1"
+                    ),
+                },
+                json=payload,
+                timeout=40,
+            )
+
+            if response.status_code != 200:
+                return {
+                    "success": False,
+                    "text": "",
+                    "error": self._format_http_error(
+                        response
+                    ),
+                }
+
+            data = response.json()
+
+            candidates = data.get(
+                "candidates",
+                []
+            )
+
+            if not candidates:
+                block_reason = ""
+
+                try:
+                    block_reason = str(
+                        data.get(
+                            "promptFeedback",
+                            {}
+                        ).get(
+                            "blockReason",
+                            ""
+                        )
+                    )
+                except Exception:
+                    block_reason = ""
+
+                error = (
+                    "Gemini لم يُرجع إجابة."
+                )
+
+                if block_reason:
+                    error += (
+                        " سبب الإيقاف: "
+                        + block_reason
+                    )
+
+                return {
+                    "success": False,
+                    "text": "",
+                    "error": error,
+                }
+
+            content = (
+                candidates[0]
+                .get(
+                    "content",
+                    {}
+                )
+            )
+
+            parts = content.get(
+                "parts",
+                []
+            )
+
+            text_parts = []
+
+            for part in parts:
+                if not isinstance(
+                    part,
+                    dict
+                ):
+                    continue
+
+                value = part.get(
+                    "text"
+                )
+
+                if value:
+                    text_parts.append(
+                        str(value)
+                    )
+
+            answer = self._clean_text(
+                "\n".join(
+                    text_parts
+                )
+            )
+
+            if not answer:
+                return {
+                    "success": False,
+                    "text": "",
+                    "error": (
+                        "وصل رد فارغ من Gemini."
+                    ),
+                }
+
+            self._append_history(
+                user_text,
+                answer
+            )
+
+            print(
+                "811: Gemini response OK | model:",
+                model
+            )
+
+            return {
+                "success": True,
+                "text": answer,
+                "error": "",
+            }
+
+        except requests.exceptions.Timeout:
+            return {
+                "success": False,
+                "text": "",
+                "error": (
+                    "انتهت مهلة انتظار رد Gemini."
+                ),
+            }
+
+        except requests.exceptions.ConnectionError:
+            return {
+                "success": False,
+                "text": "",
+                "error": (
+                    "تعذر الاتصال بخدمة Gemini. "
+                    "تحقق من الإنترنت."
+                ),
+            }
+
+        except ValueError:
+            return {
+                "success": False,
+                "text": "",
+                "error": (
+                    "تعذر قراءة استجابة Gemini."
+                ),
+            }
+
+        except Exception as exc:
+            print(
+                "811: Gemini request error:",
+                type(exc).__name__,
+                repr(exc)
+            )
+
+            return {
+                "success": False,
+                "text": "",
+                "error": (
+                    "حدث خطأ غير متوقع أثناء طلب Gemini."
+                ),
+            }
+
+    # =========================================================
+    # GROQ
+    # =========================================================
+
+    def _get_groq_response(
+        self,
+        user_text
+    ):
         try:
             if not self.groq_model:
                 model_result = (
@@ -107,8 +589,6 @@ class AIClient:
                 or ""
             )
 
-            # A model can disappear from the account/provider list.
-            # Rediscover once instead of permanently failing.
             low = error_text.lower()
 
             if (
@@ -157,23 +637,17 @@ class AIClient:
                 "حاول مرة أخرى بعد قليل."
             )
 
-    def clear_history(self):
-        self.history = [
-            {
-                "role": "system",
-                "content": self.system_instruction,
-            }
-        ]
-
     # =========================================================
-    # MODEL DISCOVERY
+    # GROQ MODEL DISCOVERY
     # =========================================================
 
-    def _detect_available_model(self):
+    def _detect_available_model(
+        self
+    ):
         try:
             response = requests.get(
                 self.groq_models_url,
-                headers=self._headers(),
+                headers=self._groq_headers(),
                 timeout=20,
             )
 
@@ -190,11 +664,19 @@ class AIClient:
 
             available_models = []
 
-            for item in data.get("data", []):
-                if not isinstance(item, dict):
+            for item in data.get(
+                "data",
+                []
+            ):
+                if not isinstance(
+                    item,
+                    dict
+                ):
                     continue
 
-                model_id = item.get("id")
+                model_id = item.get(
+                    "id"
+                )
 
                 if model_id:
                     available_models.append(
@@ -257,9 +739,9 @@ class AIClient:
                     ),
                 }
 
-            # Prefer larger general-purpose models when the provider
-            # exposes a model that is not in our explicit list.
-            def quality_score(model_id):
+            def quality_score(
+                model_id
+            ):
                 low = model_id.lower()
                 score = 0
 
@@ -287,7 +769,9 @@ class AIClient:
                 reverse=True
             )
 
-            selected = candidates[0]
+            selected = (
+                candidates[0]
+            )
 
             print(
                 "811: auto-selected Groq model:",
@@ -335,7 +819,7 @@ class AIClient:
             }
 
     # =========================================================
-    # CHAT COMPLETION
+    # GROQ CHAT COMPLETION
     # =========================================================
 
     def _call_groq(
@@ -353,8 +837,6 @@ class AIClient:
             }
         )
 
-        # Keep enough context for a useful conversation without
-        # letting mobile requests grow indefinitely.
         if len(messages) > 13:
             messages = (
                 [messages[0]]
@@ -373,7 +855,7 @@ class AIClient:
         try:
             response = requests.post(
                 self.groq_chat_url,
-                headers=self._headers(),
+                headers=self._groq_headers(),
                 json=payload,
                 timeout=35,
             )
@@ -388,6 +870,7 @@ class AIClient:
                 }
 
             data = response.json()
+
             choices = data.get(
                 "choices",
                 []
@@ -404,7 +887,10 @@ class AIClient:
 
             message = (
                 choices[0]
-                .get("message", {})
+                .get(
+                    "message",
+                    {}
+                )
             )
 
             answer = self._clean_text(
@@ -423,26 +909,10 @@ class AIClient:
                     ),
                 }
 
-            self.history.append(
-                {
-                    "role": "user",
-                    "content": user_text,
-                }
+            self._append_history(
+                user_text,
+                answer
             )
-
-            self.history.append(
-                {
-                    "role": "assistant",
-                    "content": answer,
-                }
-            )
-
-            # Hard cap the saved history as well.
-            if len(self.history) > 13:
-                self.history = (
-                    [self.history[0]]
-                    + self.history[-12:]
-                )
 
             return {
                 "success": True,
@@ -493,17 +963,48 @@ class AIClient:
             }
 
     # =========================================================
-    # HELPERS
+    # HISTORY + HELPERS
     # =========================================================
 
-    def _headers(self):
+    def _append_history(
+        self,
+        user_text,
+        answer
+    ):
+        self.history.append(
+            {
+                "role": "user",
+                "content": user_text,
+            }
+        )
+
+        self.history.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+
+        if len(self.history) > 13:
+            self.history = (
+                [self.history[0]]
+                + self.history[-12:]
+            )
+
+    def _groq_headers(
+        self
+    ):
         return {
             "Authorization": (
                 "Bearer "
                 + self.groq_key
             ),
-            "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Content-Type": (
+                "application/json"
+            ),
+            "Accept": (
+                "application/json"
+            ),
         }
 
     def _format_http_error(
@@ -521,13 +1022,19 @@ class AIClient:
         try:
             data = response.json()
 
-            if isinstance(data, dict):
+            if isinstance(
+                data,
+                dict
+            ):
                 error = data.get(
                     "error",
                     data
                 )
 
-                if isinstance(error, dict):
+                if isinstance(
+                    error,
+                    dict
+                ):
                     detail = str(
                         error.get(
                             "message",
@@ -535,7 +1042,9 @@ class AIClient:
                         )
                     )
                 else:
-                    detail = str(error)
+                    detail = str(
+                        error
+                    )
 
         except Exception:
             detail = str(
@@ -595,8 +1104,6 @@ class AIClient:
 
         text = str(text)
 
-        # Remove control characters that cause display/TTS issues while
-        # preserving normal newlines.
         text = re.sub(
             r"[\u0000-\u0008\u000b\u000c\u000e-\u001f]",
             "",
@@ -613,14 +1120,18 @@ class AIClient:
 
         lines = []
 
-        for line in text.split("\n"):
+        for line in text.split(
+            "\n"
+        ):
             line = re.sub(
                 r"[ \t]+",
                 " ",
                 line
             ).strip()
 
-            lines.append(line)
+            lines.append(
+                line
+            )
 
         return "\n".join(
             lines
