@@ -20,13 +20,13 @@ class AIClient:
     Defensive multi-provider AI client for Voice Assistant 811.
 
     Providers:
-    - Gemini 3.7 Flash (preferred when a Gemini key is entered)
+    - Gemini 2.5 Flash-Lite (preferred for fast daily voice responses)
     - Groq (kept fully compatible as a fallback / existing provider)
 
     No API key is hard-coded in source control.
     """
 
-    GEMINI_PRIMARY_MODEL = "gemini-3.7-flash"
+    GEMINI_PRIMARY_MODEL = "gemini-2.5-flash-lite"
     GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite"
 
     def __init__(
@@ -310,7 +310,7 @@ class AIClient:
         ]
 
     # =========================================================
-    # GEMINI 3.7 FLASH
+    # GEMINI 2.5 FLASH-LITE
     # =========================================================
 
     def _get_gemini_response(
