@@ -32,8 +32,6 @@ android.accept_sdk_license = True
 
 android.enable_androidx = True
 
-android.gradle_dependencies = dev.ffmpegkit-maintained:llama-android:0.1.1
-
 android.extra_manifest_xml = extra_manifest.xml
 
 
