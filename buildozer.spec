@@ -18,17 +18,21 @@ services = backgroundcore:background_core.py:foreground:sticky:foregroundService
 
 android.permissions = RECORD_AUDIO,INTERNET,ACCESS_NETWORK_STATE,MODIFY_AUDIO_SETTINGS,BLUETOOTH,BLUETOOTH_ADMIN,BLUETOOTH_CONNECT,BLUETOOTH_SCAN,POST_NOTIFICATIONS,FOREGROUND_SERVICE,FOREGROUND_SERVICE_MICROPHONE
 
-android.archs = arm64-v8a,armeabi-v7a
+android.archs = arm64-v8a
 
 orientation = portrait
 
 fullscreen = 0
 
-android.api = 33
+android.api = 35
 
-android.minapi = 21
+android.minapi = 24
 
 android.accept_sdk_license = True
+
+android.enable_androidx = True
+
+android.gradle_dependencies = dev.ffmpegkit-maintained:llama-android:0.1.1
 
 android.extra_manifest_xml = extra_manifest.xml
 
