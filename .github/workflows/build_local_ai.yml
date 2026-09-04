@@ -1,0 +1,37 @@
+name: Build Local AI APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build_local_ai.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone llama.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Android APK
+        run: |
+          cd llama.cpp/examples/llama.android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalAI-Android
+          path: llama.cpp/examples/llama.android/app/build/outputs/apk/debug/*.apk
