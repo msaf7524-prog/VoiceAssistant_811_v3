@@ -28,6 +28,7 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 
 from ai_client import AIClient
+from local_qwen_client import LocalQwenClient
 
 
 # =========================================================
@@ -712,13 +713,7 @@ class StatusOrb(Widget):
 class ChatMessageRow(FloatLayout):
     """One independently rendered conversation message."""
 
-    def __init__(
-        self,
-        app_ref,
-        text,
-        role="assistant",
-        **kwargs
-    ):
+    def __init__( self, app_ref, text, role="assistant", **kwargs ):
         super().__init__(
             size_hint_y=None,
             height=dp(70),
@@ -915,11 +910,7 @@ class ChatMessageRow(FloatLayout):
         self.background_shape.pos = self.bubble.pos
         self.background_shape.size = self.bubble.size
 
-    def _update_fallback_width(
-        self,
-        instance,
-        width
-    ):
+    def _update_fallback_width( self, instance, width ):
         instance.text_size = (
             max(
                 dp(70),
@@ -928,11 +919,7 @@ class ChatMessageRow(FloatLayout):
             None
         )
 
-    def _update_fallback_height(
-        self,
-        instance,
-        texture_size
-    ):
+    def _update_fallback_height( self, instance, texture_size ):
         if self.message_image.opacity > 0:
             return
 
@@ -1060,6 +1047,7 @@ class VoiceAssistantApp(App):
 
         self.processing = False
         self.ai_engine = None
+        self.local_qwen_engine = LocalQwenClient()
 
         # Phase 1 background core service.
         # This does not listen for the wake word yet. It only proves that a
@@ -1311,6 +1299,15 @@ class VoiceAssistantApp(App):
             color=(1, 1, 1, 1)
         )
 
+        self.local_qwen_btn = Button(
+            text="Local Qwen",
+            font_name="Roboto",
+            font_size="13sp",
+            background_normal="",
+            background_down="",
+            color=(1, 1, 1, 1)
+        )
+
         self.groq_btn = Button(
             text="Groq",
             font_name="Roboto",
@@ -1327,11 +1324,22 @@ class VoiceAssistantApp(App):
             )
         )
 
+        self.local_qwen_btn.bind(
+            on_release=lambda instance:
+            self._select_ai_provider(
+                "local_qwen"
+            )
+        )
+
         self.groq_btn.bind(
             on_release=lambda instance:
             self._select_ai_provider(
                 "groq"
             )
+        )
+
+        provider_container.add_widget(
+            self.local_qwen_btn
         )
 
         provider_container.add_widget(
@@ -1624,16 +1632,7 @@ class VoiceAssistantApp(App):
     # NATIVE ANDROID ARABIC RENDERER
     # =====================================================
 
-    def _render_android_text_to_png(
-        self,
-        text,
-        bitmap_width,
-        text_rgb=(
-            224,
-            230,
-            242
-        )
-    ):
+    def _render_android_text_to_png( self, text, bitmap_width, text_rgb=( 224, 230, 242 ) ):
         """Use Android's shaping engine (StaticLayout) without creating a View."""
         from jnius import (
             autoclass,
@@ -1866,16 +1865,11 @@ class VoiceAssistantApp(App):
     # CONVERSATION MESSAGES
     # =====================================================
 
-    def _scroll_chat_to_bottom(
-        self,
-        *args
-    ):
+    def _scroll_chat_to_bottom( self, *args ):
         if hasattr(self, "scroll"):
             self.scroll.scroll_y = 0
 
-    def _show_all_chat_fallback(
-        self
-    ):
+    def _show_all_chat_fallback( self ):
         for row in list(self._chat_rows):
             row.show_fallback()
 
@@ -1884,9 +1878,7 @@ class VoiceAssistantApp(App):
             0
         )
 
-    def _clear_chat_messages(
-        self
-    ):
+    def _clear_chat_messages( self ):
         for row in list(self._chat_rows):
             row.cancel_render()
 
@@ -1896,11 +1888,7 @@ class VoiceAssistantApp(App):
         if hasattr(self, "chat_messages"):
             self.chat_messages.clear_widgets()
 
-    def _add_chat_message(
-        self,
-        text,
-        role="assistant"
-    ):
+    def _add_chat_message( self, text, role="assistant" ):
         text = clean_unicode(text)
 
         if not text:
@@ -1922,11 +1910,7 @@ class VoiceAssistantApp(App):
 
         return row
 
-    def _set_chat_text(
-        self,
-        text,
-        role="assistant"
-    ):
+    def _set_chat_text( self, text, role="assistant" ):
         """Reset the conversation to one independently rendered message."""
         self._clear_chat_messages()
         return self._add_chat_message(
@@ -1934,20 +1918,13 @@ class VoiceAssistantApp(App):
             role=role
         )
 
-    def _append_chat_text(
-        self,
-        text,
-        role="assistant"
-    ):
+    def _append_chat_text( self, text, role="assistant" ):
         return self._add_chat_message(
             text,
             role=role
         )
 
-    def _update_user_draft(
-        self,
-        text
-    ):
+    def _update_user_draft( self, text ):
         text = clean_unicode(text)
 
         if not text:
@@ -1970,10 +1947,7 @@ class VoiceAssistantApp(App):
             0
         )
 
-    def _commit_user_message(
-        self,
-        text
-    ):
+    def _commit_user_message( self, text ):
         text = clean_unicode(text)
 
         if not text:
@@ -2000,11 +1974,7 @@ class VoiceAssistantApp(App):
     # STATES
     # =====================================================
 
-    def set_state(
-        self,
-        state,
-        message=None
-    ):
+    def set_state( self, state, message=None ):
         states = {
             "ready": {
                 "text": "جاهز",
@@ -2143,10 +2113,7 @@ class VoiceAssistantApp(App):
     # ANDROID MAIN THREAD HELPER
     # =====================================================
 
-    def _run_on_android_ui(
-        self,
-        func
-    ):
+    def _run_on_android_ui( self, func ):
         if platform != "android":
             func()
             return
@@ -2179,7 +2146,7 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-                @java_method("()V")
+@java_method("()V")
                 def run(self):
                     try:
                         func()
@@ -2208,9 +2175,7 @@ class VoiceAssistantApp(App):
     # AI PROVIDER PREFERENCE
     # =====================================================
 
-    def _api_preferences(
-        self
-    ):
+    def _api_preferences( self ):
         if platform != "android":
             return None
 
@@ -2241,10 +2206,14 @@ class VoiceAssistantApp(App):
             )
             return None
 
-    def _provider_is_available(
-        self,
-        provider
-    ):
+    def _provider_is_available( self, provider ):
+        provider = str(
+            provider or ""
+        ).strip().lower()
+
+        if provider == "local_qwen":
+            return True
+
         if self.ai_engine is None:
             return False
 
@@ -2262,10 +2231,7 @@ class VoiceAssistantApp(App):
             )
             return False
 
-    def _save_provider_choice(
-        self,
-        provider
-    ):
+    def _save_provider_choice( self, provider ):
         prefs = self._api_preferences()
 
         if prefs is None:
@@ -2285,9 +2251,7 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
 
-    def _load_provider_choice(
-        self
-    ):
+    def _load_provider_choice( self ):
         preferred = "gemini"
 
         prefs = self._api_preferences()
@@ -2303,6 +2267,7 @@ class VoiceAssistantApp(App):
                 ).strip().lower()
 
                 if saved in (
+                    "local_qwen",
                     "gemini",
                     "groq"
                 ):
@@ -2334,9 +2299,7 @@ class VoiceAssistantApp(App):
             announce=False
         )
 
-    def _refresh_provider_ui(
-        self
-    ):
+    def _refresh_provider_ui( self ):
         active = self.ai_provider_choice
 
         active_color = (
@@ -2351,6 +2314,12 @@ class VoiceAssistantApp(App):
             0.14,
             0.18,
             1.0
+        )
+
+        self.local_qwen_btn.background_color = (
+            active_color
+            if active == "local_qwen"
+            else inactive_color
         )
 
         self.gemini_btn.background_color = (
@@ -2369,10 +2338,8 @@ class VoiceAssistantApp(App):
             self,
             "footer_label"
         ):
-            provider_name = (
-                "Gemini"
-                if active == "gemini"
-                else "Groq"
+            provider_name = self._provider_display_name(
+                active
             )
 
             self.footer_label.text = (
@@ -2382,17 +2349,13 @@ class VoiceAssistantApp(App):
                 + provider_name
             )
 
-    def _select_ai_provider(
-        self,
-        provider,
-        save=True,
-        announce=True
-    ):
+    def _select_ai_provider( self, provider, save=True, announce=True ):
         provider = str(
             provider or ""
         ).strip().lower()
 
         if provider not in (
+            "local_qwen",
             "gemini",
             "groq"
         ):
@@ -2405,32 +2368,33 @@ class VoiceAssistantApp(App):
         ):
             return False
 
-        if self.ai_engine is None:
-            self.set_state(
-                "error",
-                "تعذر تهيئة محرك الذكاء الاصطناعي."
-            )
-            return False
-
-        try:
-            selected = (
-                self.ai_engine
-                .select_provider(
-                    provider
+        if provider == "local_qwen":
+            selected = True
+        else:
+            if self.ai_engine is None:
+                self.set_state(
+                    "error",
+                    "تعذر تهيئة محرك الذكاء الاصطناعي."
                 )
-            )
-        except Exception as exc:
-            print(
-                "811: Provider select error:",
-                repr(exc)
-            )
-            selected = False
+                return False
+
+            try:
+                selected = (
+                    self.ai_engine
+                    .select_provider(
+                        provider
+                    )
+                )
+            except Exception as exc:
+                print(
+                    "811: Provider select error:",
+                    repr(exc)
+                )
+                selected = False
 
         if not selected:
-            provider_name = (
-                "Gemini"
-                if provider == "gemini"
-                else "Groq"
+            provider_name = self._provider_display_name(
+                provider
             )
 
             if announce:
@@ -2461,10 +2425,8 @@ class VoiceAssistantApp(App):
         self._refresh_provider_ui()
 
         if announce:
-            provider_name = (
-                "Gemini"
-                if provider == "gemini"
-                else "Groq"
+            provider_name = self._provider_display_name(
+                provider
             )
 
             self.set_state(
@@ -2477,13 +2439,27 @@ class VoiceAssistantApp(App):
 
         return True
 
+    def _provider_display_name( self, provider ):
+        provider = str(
+            provider or ""
+        ).strip().lower()
+
+        if provider == "local_qwen":
+            return "Local Qwen"
+
+        if provider == "gemini":
+            return "Gemini"
+
+        if provider == "groq":
+            return "Groq"
+
+        return "AI"
+
     # =====================================================
     # PHASE 1 BACKGROUND CORE SERVICE
     # =====================================================
 
-    def _background_core_control_path(
-        self
-    ):
+    def _background_core_control_path( self ):
         if platform != "android":
             return None
 
@@ -2517,9 +2493,7 @@ class VoiceAssistantApp(App):
             )
             return None
 
-    def _background_core_command_path(
-        self
-    ):
+    def _background_core_command_path( self ):
         control_path = (
             self._background_core_control_path()
         )
@@ -2532,17 +2506,8 @@ class VoiceAssistantApp(App):
             "811_background_core_command.json"
         )
 
-    def _send_background_core_command(
-        self,
-        action,
-        **payload
-    ):
-        """
-        Send a one-shot command to the separate Background Core process.
-
-        Commands are written atomically to the app-private files directory.
-        The service ignores command IDs it has already handled.
-        """
+    def _send_background_core_command( self, action, **payload ):
+        """ Send a one-shot command to the separate Background Core process. Commands are written atomically to the app-private files directory. The service ignores command IDs it has already handled. """
         if platform != "android":
             return False
 
@@ -2602,18 +2567,8 @@ class VoiceAssistantApp(App):
             )
             return False
 
-    def _set_background_wake_capture(
-        self,
-        enabled,
-        reason
-    ):
-        """
-        Tell the separate background service whether it may own the microphone.
-
-        Phase 2A uses a tiny private control file because the service runs in a
-        separate Android process. This avoids competing with the existing
-        SpeechRecognizer while the Kivy Activity is active.
-        """
+    def _set_background_wake_capture( self, enabled, reason ):
+        """ Tell the separate background service whether it may own the microphone. Phase 2A uses a tiny private control file because the service runs in a separate Android process. This avoids competing with the existing SpeechRecognizer while the Kivy Activity is active. """
         if platform != "android":
             return
 
@@ -2661,16 +2616,8 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
 
-    def start_background_core(
-        self
-    ):
-        """
-        Start the dedicated Android foreground service.
-
-        Phase 1 deliberately does NOT open the microphone or implement the
-        811 wake word. The service is only the persistent background shell
-        that later phases will build on.
-        """
+    def start_background_core( self ):
+        """ Start the dedicated Android foreground service. Phase 1 deliberately does NOT open the microphone or implement the 811 wake word. The service is only the persistent background shell that later phases will build on. """
         if platform != "android":
             return
 
@@ -2711,9 +2658,7 @@ class VoiceAssistantApp(App):
             self._start_background_core_on_ui
         )
 
-    def _start_background_core_on_ui(
-        self
-    ):
+    def _start_background_core_on_ui( self ):
         if self.background_core_started:
             return
 
@@ -2774,9 +2719,7 @@ class VoiceAssistantApp(App):
     # NATIVE TTS
     # =====================================================
 
-    def init_native_tts(
-        self
-    ):
+    def init_native_tts( self ):
         if platform != "android":
             return
 
@@ -2784,9 +2727,7 @@ class VoiceAssistantApp(App):
             self._init_native_tts_on_ui
         )
 
-    def _init_native_tts_on_ui(
-        self
-    ):
+    def _init_native_tts_on_ui( self ):
         try:
             from jnius import (
                 autoclass,
@@ -2856,11 +2797,8 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-                @java_method("(I)V")
-                def onInit(
-                    self,
-                    status
-                ):
+@java_method("(I)V")
+                def onInit( self, status ):
                     try:
                         if (
                             status
@@ -3060,9 +2998,7 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
 
-    def _start_tts_output_visualizer(
-        self
-    ):
+    def _start_tts_output_visualizer( self ):
         """Start real-time analysis of the audio mix while 811 speaks."""
         if platform != "android":
             return
@@ -3071,9 +3007,7 @@ class VoiceAssistantApp(App):
             self._start_tts_output_visualizer_on_ui
         )
 
-    def _start_tts_output_visualizer_on_ui(
-        self
-    ):
+    def _start_tts_output_visualizer_on_ui( self ):
         # Always release a previous instance first.
         self._stop_tts_output_visualizer_on_ui()
 
@@ -3099,16 +3033,8 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-                @java_method(
-                    "(Landroid/media/audiofx/"
-                    "Visualizer;[BI)V"
-                )
-                def onWaveFormDataCapture(
-                    self,
-                    visualizer,
-                    waveform,
-                    sampling_rate
-                ):
+@java_method( "(Landroid/media/audiofx/" "Visualizer;[BI)V" )
+                def onWaveFormDataCapture( self, visualizer, waveform, sampling_rate ):
                     try:
                         if waveform is None:
                             return
@@ -3221,16 +3147,8 @@ class VoiceAssistantApp(App):
                             repr(exc)
                         )
 
-                @java_method(
-                    "(Landroid/media/audiofx/"
-                    "Visualizer;[BI)V"
-                )
-                def onFftDataCapture(
-                    self,
-                    visualizer,
-                    fft,
-                    sampling_rate
-                ):
+@java_method( "(Landroid/media/audiofx/" "Visualizer;[BI)V" )
+                def onFftDataCapture( self, visualizer, fft, sampling_rate ):
                     # Waveform data is enough for real loudness reaction.
                     pass
 
@@ -3305,9 +3223,7 @@ class VoiceAssistantApp(App):
                 repr(exc)
             )
 
-    def _stop_tts_output_visualizer(
-        self
-    ):
+    def _stop_tts_output_visualizer( self ):
         if platform != "android":
             self._tts_output_visualizer = None
             self._tts_output_visualizer_listener = None
@@ -3317,9 +3233,7 @@ class VoiceAssistantApp(App):
             self._stop_tts_output_visualizer_on_ui
         )
 
-    def _stop_tts_output_visualizer_on_ui(
-        self
-    ):
+    def _stop_tts_output_visualizer_on_ui( self ):
         visualizer = self._tts_output_visualizer
 
         self._tts_output_visualizer = None
@@ -3344,12 +3258,8 @@ class VoiceAssistantApp(App):
             "811: TTS output visualizer stopped"
         )
 
-    @mainthread
-    def on_tts_output_waveform(
-        self,
-        level,
-        bars
-    ):
+@mainthread
+    def on_tts_output_waveform( self, level, bars ):
         """Drive the green orb and center bars from the real TTS output."""
         if not self.tts_is_speaking:
             return
@@ -3359,10 +3269,7 @@ class VoiceAssistantApp(App):
             bars
         )
 
-    def speak(
-        self,
-        text
-    ):
+    def speak( self, text ):
         if platform != "android":
             print(
                 "811 [Desktop TTS]:",
@@ -3386,10 +3293,7 @@ class VoiceAssistantApp(App):
             )
         )
 
-    def _speak_on_android_ui(
-        self,
-        text
-    ):
+    def _speak_on_android_ui( self, text ):
         try:
             from jnius import (
                 autoclass,
@@ -3447,7 +3351,7 @@ class VoiceAssistantApp(App):
             # speak(CharSequence, int, Bundle, String)
             #
             # Pyjnius does not always up-cast a Python string
-            # to java.lang.CharSequence automatically.  That
+            # to java.lang.CharSequence automatically. That
             # was the exact runtime failure seen on the phone.
             # Force the Java types explicitly.
             # -------------------------------------------------
@@ -3636,11 +3540,7 @@ class VoiceAssistantApp(App):
                 0
             )
 
-    def _watch_tts_completion(
-        self,
-        dt,
-        watch_generation
-    ):
+    def _watch_tts_completion( self, dt, watch_generation ):
         # A Clear/interrupt increments the generation, invalidating old watchers.
         if watch_generation != self._tts_watch_generation:
             return
@@ -3679,9 +3579,7 @@ class VoiceAssistantApp(App):
         # or return to the normal one-shot ready state.
         self._schedule_handsfree_resume()
 
-    def stop_speaking(
-        self
-    ):
+    def stop_speaking( self ):
         """Immediately stop queued/current Android TTS without shutting it down."""
         self._tts_pending_text = ""
         self.tts_is_speaking = False
@@ -3698,9 +3596,7 @@ class VoiceAssistantApp(App):
             self._stop_speaking_on_android_ui
         )
 
-    def _stop_speaking_on_android_ui(
-        self
-    ):
+    def _stop_speaking_on_android_ui( self ):
         try:
             if self.tts is not None:
                 result = self.tts.stop()
@@ -3708,9 +3604,7 @@ class VoiceAssistantApp(App):
         except Exception as exc:
             print("811: TTS stop error:", repr(exc))
 
-    def _show_tts_error(
-        self
-    ):
+    def _show_tts_error( self ):
         self._disable_handsfree()
         self._stop_tts_output_visualizer()
         self.processing = False
@@ -3755,9 +3649,7 @@ class VoiceAssistantApp(App):
     # MICROPHONE PERMISSION
     # =====================================================
 
-    def _has_record_audio_permission(
-        self
-    ):
+    def _has_record_audio_permission( self ):
         if platform != "android":
             return False
 
@@ -3780,9 +3672,7 @@ class VoiceAssistantApp(App):
             )
             return False
 
-    def _request_record_audio_permission(
-        self
-    ):
+    def _request_record_audio_permission( self ):
         if platform != "android":
             return
 
@@ -3812,10 +3702,7 @@ class VoiceAssistantApp(App):
     # SPEECH ERROR MAP
     # =====================================================
 
-    def _speech_error_info(
-        self,
-        error_code
-    ):
+    def _speech_error_info( self, error_code ):
         errors = {
             1: (
                 "ERROR_NETWORK_TIMEOUT",
@@ -3887,9 +3774,7 @@ class VoiceAssistantApp(App):
             )
         )
 
-    def _current_speech_language(
-        self
-    ):
+    def _current_speech_language( self ):
         if (
             self.speech_language_index < 0
             or self.speech_language_index
@@ -3901,9 +3786,7 @@ class VoiceAssistantApp(App):
             self.speech_language_index
         ]
 
-    def _speech_language_label(
-        self
-    ):
+    def _speech_language_label( self ):
         language = (
             self._current_speech_language()
         )
@@ -3917,9 +3800,7 @@ class VoiceAssistantApp(App):
     # SPEECH RECOGNIZER INITIALIZATION
     # =====================================================
 
-    def init_native_speech(
-        self
-    ):
+    def init_native_speech( self ):
         if platform != "android":
             return
 
@@ -3927,9 +3808,7 @@ class VoiceAssistantApp(App):
             self._init_native_speech_on_ui
         )
 
-    def _init_native_speech_on_ui(
-        self
-    ):
+    def _init_native_speech_on_ui( self ):
         try:
             from jnius import (
                 autoclass,
@@ -3998,69 +3877,36 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-                @java_method(
-                    "(Landroid/os/Bundle;)V"
-                )
-                def onReadyForSpeech(
-                    self,
-                    params
-                ):
+@java_method( "(Landroid/os/Bundle;)V" )
+                def onReadyForSpeech( self, params ):
                     outer.on_speech_ready()
 
-                @java_method(
-                    "()V"
-                )
-                def onBeginningOfSpeech(
-                    self
-                ):
+@java_method( "()V" )
+                def onBeginningOfSpeech( self ):
                     outer.on_speech_begin()
 
-                @java_method(
-                    "(F)V"
-                )
-                def onRmsChanged(
-                    self,
-                    rmsdB
-                ):
+@java_method( "(F)V" )
+                def onRmsChanged( self, rmsdB ):
                     outer.on_speech_rms(
                         float(rmsdB)
                     )
 
-                @java_method(
-                    "([B)V"
-                )
-                def onBufferReceived(
-                    self,
-                    buffer
-                ):
+@java_method( "([B)V" )
+                def onBufferReceived( self, buffer ):
                     pass
 
-                @java_method(
-                    "()V"
-                )
-                def onEndOfSpeech(
-                    self
-                ):
+@java_method( "()V" )
+                def onEndOfSpeech( self ):
                     outer.on_speech_end()
 
-                @java_method(
-                    "(I)V"
-                )
-                def onError(
-                    self,
-                    error
-                ):
+@java_method( "(I)V" )
+                def onError( self, error ):
                     outer.on_speech_error(
                         int(error)
                     )
 
-                @java_method(
-                    "(Landroid/os/Bundle;)V"
-                )
-                def onResults(
-                    self,
-                    results
-                ):
+@java_method( "(Landroid/os/Bundle;)V" )
+                def onResults( self, results ):
                     # Important:
                     # Extract Java Bundle data inside the Java callback.
                     # Only a normal Python string crosses to Kivy's thread.
@@ -4075,13 +3921,8 @@ class VoiceAssistantApp(App):
                         text
                     )
 
-                @java_method(
-                    "(Landroid/os/Bundle;)V"
-                )
-                def onPartialResults(
-                    self,
-                    results
-                ):
+@java_method( "(Landroid/os/Bundle;)V" )
+                def onPartialResults( self, results ):
                     text = (
                         outer
                         ._extract_speech_results(
@@ -4093,14 +3934,8 @@ class VoiceAssistantApp(App):
                         text
                     )
 
-                @java_method(
-                    "(ILandroid/os/Bundle;)V"
-                )
-                def onEvent(
-                    self,
-                    event_type,
-                    params
-                ):
+@java_method( "(ILandroid/os/Bundle;)V" )
+                def onEvent( self, event_type, params ):
                     pass
 
             self._speech_listener = (
@@ -4162,9 +3997,7 @@ class VoiceAssistantApp(App):
     # START LISTENING
     # =====================================================
 
-    def start_listening(
-        self
-    ):
+    def start_listening( self ):
         if platform != "android":
             self.set_state(
                 "error",
@@ -4217,9 +4050,7 @@ class VoiceAssistantApp(App):
             self._start_listening_on_ui
         )
 
-    def _start_listening_on_ui(
-        self
-    ):
+    def _start_listening_on_ui( self ):
         try:
             from jnius import autoclass
 
@@ -4326,9 +4157,7 @@ class VoiceAssistantApp(App):
     # STOP LISTENING
     # =====================================================
 
-    def stop_listening(
-        self
-    ):
+    def stop_listening( self ):
         if self.speech_recognizer is None:
             return
 
@@ -4336,9 +4165,7 @@ class VoiceAssistantApp(App):
             self._stop_listening_on_ui
         )
 
-    def _stop_listening_on_ui(
-        self
-    ):
+    def _stop_listening_on_ui( self ):
         try:
             self.speech_recognizer.stopListening()
         except Exception as exc:
@@ -4358,9 +4185,7 @@ class VoiceAssistantApp(App):
                 0
             )
 
-    def cancel_listening(
-        self
-    ):
+    def cancel_listening( self ):
         """Cancel SpeechRecognizer without accepting a final result."""
         self.is_listening = False
 
@@ -4379,9 +4204,7 @@ class VoiceAssistantApp(App):
             1.0
         )
 
-    def _cancel_listening_on_ui(
-        self
-    ):
+    def _cancel_listening_on_ui( self ):
         try:
             if self.speech_recognizer is not None:
                 self.speech_recognizer.cancel()
@@ -4389,20 +4212,14 @@ class VoiceAssistantApp(App):
         except Exception as exc:
             print("811: SpeechRecognizer cancel error:", repr(exc))
 
-    def _clear_speech_cancel_guard(
-        self,
-        dt
-    ):
+    def _clear_speech_cancel_guard( self, dt ):
         self._ignore_next_speech_error = False
 
     # =====================================================
     # SPEECH RESULTS
     # =====================================================
 
-    def _extract_speech_results(
-        self,
-        results
-    ):
+    def _extract_speech_results( self, results ):
         if results is None:
             return ""
 
@@ -4443,11 +4260,8 @@ class VoiceAssistantApp(App):
     # SPEECH CALLBACKS
     # =====================================================
 
-    @mainthread
-    def on_speech_rms(
-        self,
-        rms_db
-    ):
+@mainthread
+    def on_speech_rms( self, rms_db ):
         """Drive the visualizer from real microphone loudness while listening."""
         if not self.is_listening:
             return
@@ -4469,37 +4283,28 @@ class VoiceAssistantApp(App):
             level
         )
 
-    @mainthread
-    def on_speech_ready(
-        self
-    ):
+@mainthread
+    def on_speech_ready( self ):
         if not self.processing:
             self.set_state(
                 "listening"
             )
 
-    @mainthread
-    def on_speech_begin(
-        self
-    ):
+@mainthread
+    def on_speech_begin( self ):
         self.set_state(
             "listening"
         )
 
-    @mainthread
-    def on_speech_end(
-        self
-    ):
+@mainthread
+    def on_speech_end( self ):
         if self.is_listening:
             self.set_state(
                 "thinking"
             )
 
-    @mainthread
-    def on_speech_partial_text(
-        self,
-        text
-    ):
+@mainthread
+    def on_speech_partial_text( self, text ):
         text = clean_unicode(
             text
         )
@@ -4509,11 +4314,8 @@ class VoiceAssistantApp(App):
                 text
             )
 
-    @mainthread
-    def on_speech_results_text(
-        self,
-        text
-    ):
+@mainthread
+    def on_speech_results_text( self, text ):
         self.is_listening = False
         self.speech_recovery_attempts = 0
 
@@ -4551,10 +4353,8 @@ class VoiceAssistantApp(App):
             self.processing = False
             self.speak_btn.disabled = False
 
-            provider_name = (
-                "Gemini"
-                if provider == "gemini"
-                else "Groq"
+            provider_name = self._provider_display_name(
+                provider
             )
 
             self.set_state(
@@ -4586,11 +4386,8 @@ class VoiceAssistantApp(App):
             daemon=True
         ).start()
 
-    @mainthread
-    def on_speech_error(
-        self,
-        error_code
-    ):
+@mainthread
+    def on_speech_error( self, error_code ):
         self.is_listening = False
 
         error_code = int(
@@ -4767,9 +4564,7 @@ class VoiceAssistantApp(App):
     # SPEECH RECOVERY
     # =====================================================
 
-    def _recreate_speech_and_retry_on_ui(
-        self
-    ):
+    def _recreate_speech_and_retry_on_ui( self ):
         try:
             if self.speech_recognizer is not None:
                 try:
@@ -4836,9 +4631,7 @@ class VoiceAssistantApp(App):
     # HANDS-FREE SESSION
     # =====================================================
 
-    def _enable_handsfree(
-        self
-    ):
+    def _enable_handsfree( self ):
         self._handsfree_generation += 1
         self.handsfree_active = True
 
@@ -4846,9 +4639,7 @@ class VoiceAssistantApp(App):
             "811: Hands-free session enabled"
         )
 
-    def _disable_handsfree(
-        self
-    ):
+    def _disable_handsfree( self ):
         self._handsfree_generation += 1
         self.handsfree_active = False
 
@@ -4856,9 +4647,7 @@ class VoiceAssistantApp(App):
             "811: Hands-free session disabled"
         )
 
-    def _schedule_handsfree_resume(
-        self
-    ):
+    def _schedule_handsfree_resume( self ):
         """Restart listening shortly after a successful TTS turn."""
         if not self.handsfree_active:
             self._return_to_ready()
@@ -4878,10 +4667,7 @@ class VoiceAssistantApp(App):
             0.55
         )
 
-    def _resume_handsfree_listening(
-        self,
-        generation
-    ):
+    def _resume_handsfree_listening( self, generation ):
         if not self.handsfree_active:
             return
 
@@ -4910,10 +4696,7 @@ class VoiceAssistantApp(App):
     # BUTTON
     # =====================================================
 
-    def on_speak_click(
-        self,
-        instance
-    ):
+    def on_speak_click( self, instance ):
         if self.processing:
             return
 
@@ -4934,10 +4717,8 @@ class VoiceAssistantApp(App):
         ):
             self._disable_handsfree()
 
-            provider_name = (
-                "Gemini"
-                if provider == "gemini"
-                else "Groq"
+            provider_name = self._provider_display_name(
+                provider
             )
 
             self.set_state(
@@ -4958,46 +4739,49 @@ class VoiceAssistantApp(App):
     # AI PIPELINE
     # =====================================================
 
-    def process_user_text(
-        self,
-        user_text,
-        provider,
-        request_serial
-    ):
+    def process_user_text( self, user_text, provider, request_serial ):
         try:
             if request_serial != self._request_serial:
                 return
 
-            if self.ai_engine is None:
-                self.update_error(
-                    "تعذر تهيئة محرك الذكاء الاصطناعي.",
-                    request_serial
+            if provider == "local_qwen":
+                response = (
+                    self.local_qwen_engine
+                    .get_response(
+                        user_text
+                    )
                 )
-                return
+            else:
+                if self.ai_engine is None:
+                    self.update_error(
+                        "تعذر تهيئة محرك الذكاء الاصطناعي.",
+                        request_serial
+                    )
+                    return
 
-            if not (
-                self.ai_engine
-                .select_provider(
+                if not (
+                    self.ai_engine
+                    .select_provider(
+                        provider
+                    )
+                ):
+                    self.update_error(
+                        "مزود الذكاء الاصطناعي المختار غير متوفر.",
+                        request_serial
+                    )
+                    return
+
+                print(
+                    "811: AI provider for request:",
                     provider
                 )
-            ):
-                self.update_error(
-                    "مزود الذكاء الاصطناعي المختار غير متوفر.",
-                    request_serial
-                )
-                return
 
-            print(
-                "811: AI provider for request:",
-                provider
-            )
-
-            response = (
-                self.ai_engine
-                .get_response(
-                    user_text
+                response = (
+                    self.ai_engine
+                    .get_response(
+                        user_text
+                    )
                 )
-            )
 
             response = (
                 ""
@@ -5032,13 +4816,8 @@ class VoiceAssistantApp(App):
                 request_serial
             )
 
-    @mainthread
-    def update_voice_conversation(
-        self,
-        user_text,
-        response,
-        request_serial
-    ):
+@mainthread
+    def update_voice_conversation( self, user_text, response, request_serial ):
         if request_serial != self._request_serial:
             return
 
@@ -5062,12 +4841,8 @@ class VoiceAssistantApp(App):
 
         # The TTS watcher returns the UI to ready when playback ends.
 
-    @mainthread
-    def update_error(
-        self,
-        message,
-        request_serial=None
-    ):
+@mainthread
+    def update_error( self, message, request_serial=None ):
         if (
             request_serial is not None
             and request_serial != self._request_serial
@@ -5093,10 +4868,7 @@ class VoiceAssistantApp(App):
     # READY
     # =====================================================
 
-    def _return_to_ready(
-        self,
-        *args
-    ):
+    def _return_to_ready( self, *args ):
         if self.processing:
             return
 
@@ -5111,10 +4883,7 @@ class VoiceAssistantApp(App):
     # CLEAR
     # =====================================================
 
-    def on_clear_click(
-        self,
-        instance
-    ):
+    def on_clear_click( self, instance ):
         # Clear is an emergency stop as well as a conversation reset.
         # It must work while listening, thinking, speaking, or waiting for the
         # next automatic hands-free turn.
@@ -5152,9 +4921,7 @@ class VoiceAssistantApp(App):
     # APP BACKGROUND / FOREGROUND
     # =====================================================
 
-    def on_pause(
-        self
-    ):
+    def on_pause( self ):
         self._app_is_foreground = False
 
         # Phase 2A only gives the service the microphone when there is no
@@ -5198,9 +4965,7 @@ class VoiceAssistantApp(App):
         # foreground service alive.
         return True
 
-    def on_resume(
-        self
-    ):
+    def on_resume( self ):
         self._app_is_foreground = True
 
         # Release the service microphone before the user interacts with the
@@ -5214,9 +4979,7 @@ class VoiceAssistantApp(App):
     # STOP
     # =====================================================
 
-    def on_stop(
-        self
-    ):
+    def on_stop( self ):
         self._disable_handsfree()
 
         try:
@@ -5250,9 +5013,7 @@ class VoiceAssistantApp(App):
 
         super().on_stop()
 
-    def _destroy_speech_on_ui(
-        self
-    ):
+    def _destroy_speech_on_ui( self ):
         try:
             if self.speech_recognizer is not None:
                 try:
