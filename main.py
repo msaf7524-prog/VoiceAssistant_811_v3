@@ -2146,7 +2146,7 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-@java_method("()V")
+                @java_method("()V")
                 def run(self):
                     try:
                         func()
@@ -2797,7 +2797,7 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-@java_method("(I)V")
+                @java_method("(I)V")
                 def onInit( self, status ):
                     try:
                         if (
@@ -3033,7 +3033,7 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-@java_method( "(Landroid/media/audiofx/" "Visualizer;[BI)V" )
+                @java_method( "(Landroid/media/audiofx/" "Visualizer;[BI)V" )
                 def onWaveFormDataCapture( self, visualizer, waveform, sampling_rate ):
                     try:
                         if waveform is None:
@@ -3147,7 +3147,7 @@ class VoiceAssistantApp(App):
                             repr(exc)
                         )
 
-@java_method( "(Landroid/media/audiofx/" "Visualizer;[BI)V" )
+                @java_method( "(Landroid/media/audiofx/" "Visualizer;[BI)V" )
                 def onFftDataCapture( self, visualizer, fft, sampling_rate ):
                     # Waveform data is enough for real loudness reaction.
                     pass
@@ -3258,7 +3258,7 @@ class VoiceAssistantApp(App):
             "811: TTS output visualizer stopped"
         )
 
-@mainthread
+    @mainthread
     def on_tts_output_waveform( self, level, bars ):
         """Drive the green orb and center bars from the real TTS output."""
         if not self.tts_is_speaking:
@@ -3877,35 +3877,35 @@ class VoiceAssistantApp(App):
                 ]
                 __javacontext__ = "app"
 
-@java_method( "(Landroid/os/Bundle;)V" )
+                @java_method( "(Landroid/os/Bundle;)V" )
                 def onReadyForSpeech( self, params ):
                     outer.on_speech_ready()
 
-@java_method( "()V" )
+                @java_method( "()V" )
                 def onBeginningOfSpeech( self ):
                     outer.on_speech_begin()
 
-@java_method( "(F)V" )
+                @java_method( "(F)V" )
                 def onRmsChanged( self, rmsdB ):
                     outer.on_speech_rms(
                         float(rmsdB)
                     )
 
-@java_method( "([B)V" )
+                @java_method( "([B)V" )
                 def onBufferReceived( self, buffer ):
                     pass
 
-@java_method( "()V" )
+                @java_method( "()V" )
                 def onEndOfSpeech( self ):
                     outer.on_speech_end()
 
-@java_method( "(I)V" )
+                @java_method( "(I)V" )
                 def onError( self, error ):
                     outer.on_speech_error(
                         int(error)
                     )
 
-@java_method( "(Landroid/os/Bundle;)V" )
+                @java_method( "(Landroid/os/Bundle;)V" )
                 def onResults( self, results ):
                     # Important:
                     # Extract Java Bundle data inside the Java callback.
@@ -3921,7 +3921,7 @@ class VoiceAssistantApp(App):
                         text
                     )
 
-@java_method( "(Landroid/os/Bundle;)V" )
+                @java_method( "(Landroid/os/Bundle;)V" )
                 def onPartialResults( self, results ):
                     text = (
                         outer
@@ -3934,7 +3934,7 @@ class VoiceAssistantApp(App):
                         text
                     )
 
-@java_method( "(ILandroid/os/Bundle;)V" )
+                @java_method( "(ILandroid/os/Bundle;)V" )
                 def onEvent( self, event_type, params ):
                     pass
 
@@ -4260,7 +4260,7 @@ class VoiceAssistantApp(App):
     # SPEECH CALLBACKS
     # =====================================================
 
-@mainthread
+    @mainthread
     def on_speech_rms( self, rms_db ):
         """Drive the visualizer from real microphone loudness while listening."""
         if not self.is_listening:
@@ -4283,27 +4283,27 @@ class VoiceAssistantApp(App):
             level
         )
 
-@mainthread
+    @mainthread
     def on_speech_ready( self ):
         if not self.processing:
             self.set_state(
                 "listening"
             )
 
-@mainthread
+    @mainthread
     def on_speech_begin( self ):
         self.set_state(
             "listening"
         )
 
-@mainthread
+    @mainthread
     def on_speech_end( self ):
         if self.is_listening:
             self.set_state(
                 "thinking"
             )
 
-@mainthread
+    @mainthread
     def on_speech_partial_text( self, text ):
         text = clean_unicode(
             text
@@ -4314,7 +4314,7 @@ class VoiceAssistantApp(App):
                 text
             )
 
-@mainthread
+    @mainthread
     def on_speech_results_text( self, text ):
         self.is_listening = False
         self.speech_recovery_attempts = 0
@@ -4386,7 +4386,7 @@ class VoiceAssistantApp(App):
             daemon=True
         ).start()
 
-@mainthread
+    @mainthread
     def on_speech_error( self, error_code ):
         self.is_listening = False
 
@@ -4816,7 +4816,7 @@ class VoiceAssistantApp(App):
                 request_serial
             )
 
-@mainthread
+    @mainthread
     def update_voice_conversation( self, user_text, response, request_serial ):
         if request_serial != self._request_serial:
             return
@@ -4841,7 +4841,7 @@ class VoiceAssistantApp(App):
 
         # The TTS watcher returns the UI to ready when playback ends.
 
-@mainthread
+    @mainthread
     def update_error( self, message, request_serial=None ):
         if (
             request_serial is not None
