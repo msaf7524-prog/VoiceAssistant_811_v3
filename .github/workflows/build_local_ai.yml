@@ -1,37 +1,468 @@
-name: Build Local AI APK
+# Full replacement for .github/workflows/build_local_ai.yml
+# Commit this file with: Prepare Local Qwen engine [skip ci]
+# Then run "Build Local Qwen Engine" manually from the Actions tab.
+name: Build Local Qwen Engine
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/build_local_ai.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice811-qwen-engine-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LLAMA_CPP_COMMIT: "4d9176092d00586775af140581bb0b558ddc4389"
+  BASE_PROJECT_COMMIT: "4c470fe45968704b8a92abd73a2f255d806c5c76"
+  NDK_VERSION: "29.0.13113456"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-
+  build-engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - name: Clone llama.cpp
-        run: |
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+      - name: Read pinned llama.cpp source
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ env.LLAMA_CPP_COMMIT }}
+          path: llama-source
+          persist-credentials: false
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v5
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build Android APK
+      - name: Install pinned Android NDK and native build tools
+        shell: bash
         run: |
-          cd llama.cpp/examples/llama.android
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          set -euo pipefail
+          sdkmanager "ndk;$NDK_VERSION"
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build binutils
+          test -f "llama-source/src/models/qwen35.cpp"
+          test "$(git -C llama-source rev-parse HEAD)" = "$LLAMA_CPP_COMMIT"
 
-      - name: Upload APK
+      - name: Write the complete native engine source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p native
+          cat > native/CMakeLists.txt <<'VOICE811_SOURCE'
+          cmake_minimum_required(VERSION 3.22)
+          project(qwen811 LANGUAGES C CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+          set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_APP OFF CACHE BOOL "" FORCE)
+          set(LLAMA_BUILD_MTMD OFF CACHE BOOL "" FORCE)
+          set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
+          set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+          set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+          set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
+          set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+          set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
+          set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
+          set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          if(NOT DEFINED LLAMA_SOURCE_DIR)
+              message(FATAL_ERROR "LLAMA_SOURCE_DIR is required")
+          endif()
+          add_subdirectory("${LLAMA_SOURCE_DIR}" llama-build)
+          add_library(qwen811 SHARED qwen811.cpp)
+          target_link_libraries(qwen811 PRIVATE llama)
+          set_target_properties(qwen811 PROPERTIES
+              CXX_VISIBILITY_PRESET hidden
+              VISIBILITY_INLINES_HIDDEN YES)
+          if(ANDROID)
+              target_link_options(qwen811 PRIVATE
+                  "-Wl,--exclude-libs,ALL"
+                  "-Wl,-z,defs"
+                  "-Wl,-z,max-page-size=16384")
+          endif()
+          VOICE811_SOURCE
+
+          cat > native/qwen811.cpp <<'VOICE811_SOURCE'
+          #include "llama.h"
+          #include <algorithm>
+          #include <atomic>
+          #include <cstdint>
+          #include <cstdlib>
+          #include <cstring>
+          #include <limits>
+          #include <memory>
+          #include <mutex>
+          #include <stdexcept>
+          #include <string>
+          #include <vector>
+
+          #define QWEN_API extern "C" __attribute__((visibility("default")))
+
+          // C ABI v1 for Python ctypes. No HTTP, JNI, Kotlin, or Python package required.
+          // The caller owns each handle and must not destroy it during another call.
+          // generate() receives a complete Qwen3.5 text chat prompt, formatted by Python.
+          // Status: 0 = success, 1 = error, 2 = cancelled, 3 = context budget exceeded.
+          namespace {
+          thread_local std::string last_error;
+          std::once_flag backend_once;
+          constexpr int BATCH_SIZE = 128;
+          constexpr size_t MAX_PROMPT_BYTES = 256 * 1024;
+
+          struct Engine {
+              llama_model * model = nullptr;
+              llama_context * context = nullptr;
+              std::atomic<bool> cancelled{false};
+              std::mutex mutex;
+              ~Engine() {
+                  if (context) llama_free(context);
+                  if (model) llama_model_free(model);
+              }
+          };
+
+          bool should_abort(void * data) {
+              return static_cast<Engine *>(data)->cancelled.load(std::memory_order_relaxed);
+          }
+
+          void quiet_log(enum ggml_log_level, const char *, void *) {
+              // Native errors are returned through last_error. Do not log user prompts.
+          }
+
+          std::vector<llama_token> tokenize(Engine & engine, const char * prompt) {
+              if (!prompt) throw std::runtime_error("Prompt is missing");
+              const size_t bytes = std::strlen(prompt);
+              if (bytes == 0 || bytes > MAX_PROMPT_BYTES)
+                  throw std::runtime_error("Prompt is empty or too large");
+              const auto * vocab = llama_model_get_vocab(engine.model);
+              int count = llama_tokenize(vocab, prompt, static_cast<int>(bytes), nullptr, 0, true, true);
+              if (count == std::numeric_limits<int32_t>::min())
+                  throw std::runtime_error("Token count overflow");
+              if (count >= 0) throw std::runtime_error("Tokenizer returned no tokens");
+              std::vector<llama_token> tokens(static_cast<size_t>(-count));
+              count = llama_tokenize(vocab, prompt, static_cast<int>(bytes), tokens.data(),
+                                     static_cast<int>(tokens.size()), true, true);
+              if (count <= 0) throw std::runtime_error("Tokenization failed");
+              tokens.resize(static_cast<size_t>(count));
+              return tokens;
+          }
+
+          std::string token_piece(const llama_vocab * vocab, llama_token token) {
+              char buffer[256];
+              int size = llama_token_to_piece(vocab, token, buffer, sizeof(buffer), 0, true);
+              if (size >= 0) return std::string(buffer, static_cast<size_t>(size));
+              if (size == std::numeric_limits<int32_t>::min())
+                  throw std::runtime_error("Token piece overflow");
+              std::string result(static_cast<size_t>(-size), '\0');
+              size = llama_token_to_piece(vocab, token, &result[0], static_cast<int>(result.size()), 0, true);
+              if (size < 0) throw std::runtime_error("Token decoding failed");
+              result.resize(static_cast<size_t>(size));
+              return result;
+          }
+
+          // Token limits can split a multibyte character. Drop only an incomplete tail.
+          void trim_incomplete_utf8(std::string & text) {
+              if (text.empty()) return;
+              size_t start = text.size() - 1;
+              while (start > 0 && (static_cast<unsigned char>(text[start]) & 0xc0) == 0x80) --start;
+              const auto lead = static_cast<unsigned char>(text[start]);
+              const size_t width = lead < 0x80 ? 1 : (lead & 0xe0) == 0xc0 ? 2 :
+                                   (lead & 0xf0) == 0xe0 ? 3 : (lead & 0xf8) == 0xf0 ? 4 : 1;
+              if (text.size() - start < width) text.resize(start);
+          }
+          }
+
+          QWEN_API int qwen811_abi_version() { return 1; }
+          QWEN_API const char * qwen811_last_error() { return last_error.c_str(); }
+          QWEN_API void qwen811_free_text(void * text) { std::free(text); }
+
+          QWEN_API void * qwen811_load(const char * path, int context_size, int threads) {
+              last_error.clear();
+              try {
+                  if (!path || !*path) throw std::runtime_error("GGUF path is missing");
+                  if (context_size < 512 || context_size > 4096)
+                      throw std::runtime_error("Context must be between 512 and 4096 tokens");
+                  if (threads < 1 || threads > 4)
+                      throw std::runtime_error("Threads must be between 1 and 4");
+                  std::call_once(backend_once, [] {
+                      llama_log_set(quiet_log, nullptr);
+                      llama_backend_init();
+                  });
+                  auto engine = std::make_unique<Engine>();
+                  auto model_params = llama_model_default_params();
+                  model_params.n_gpu_layers = 0;
+                  model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
+                  model_params.load_mtp = false;
+                  engine->model = llama_model_load_from_file(path, model_params);
+                  if (!engine->model) throw std::runtime_error("GGUF load failed; check file and available memory");
+                  char architecture[64] = {};
+                  if (llama_model_meta_val_str(engine->model, "general.architecture", architecture,
+                                               sizeof(architecture)) < 0 || std::string(architecture) != "qwen35")
+                      throw std::runtime_error("Select a Qwen3.5 GGUF model (qwen35 architecture)");
+                  if (llama_model_ftype(engine->model) != LLAMA_FTYPE_MOSTLY_Q4_K_M)
+                      throw std::runtime_error("Select the Q4_K_M quantization");
+                  const uint64_t parameters = llama_model_n_params(engine->model);
+                  if (parameters < 1500000000ULL || parameters > 2500000000ULL)
+                      throw std::runtime_error("Select the 2B model size");
+                  auto params = llama_context_default_params();
+                  params.n_ctx = static_cast<uint32_t>(context_size);
+                  params.n_batch = BATCH_SIZE;
+                  params.n_ubatch = BATCH_SIZE;
+                  params.n_seq_max = 1;
+                  params.n_threads = threads;
+                  params.n_threads_batch = threads;
+                  params.offload_kqv = false;
+                  params.op_offload = false;
+                  params.no_perf = true;
+                  params.abort_callback = should_abort;
+                  params.abort_callback_data = engine.get();
+                  engine->context = llama_init_from_model(engine->model, params);
+                  if (!engine->context) throw std::runtime_error("Context allocation failed; insufficient memory or incompatible file");
+                  return engine.release();
+              } catch (const std::exception & error) {
+                  last_error = error.what();
+              } catch (...) {
+                  last_error = "Unknown native load error";
+              }
+              return nullptr;
+          }
+
+          QWEN_API int qwen811_token_count(void * handle, const char * prompt) {
+              last_error.clear();
+              if (!handle) { last_error = "Model is not loaded"; return -1; }
+              try {
+                  auto & engine = *static_cast<Engine *>(handle);
+                  std::lock_guard<std::mutex> guard(engine.mutex);
+                  return static_cast<int>(tokenize(engine, prompt).size());
+              } catch (const std::exception & error) {
+                  last_error = error.what();
+              } catch (...) {
+                  last_error = "Unknown tokenization error";
+              }
+              return -1;
+          }
+
+          QWEN_API int qwen811_generate(void * handle, const char * prompt, int max_tokens, char ** output) {
+              last_error.clear();
+              if (output) *output = nullptr;
+              if (!handle || !output || max_tokens < 1 || max_tokens > 512) {
+                  last_error = "Invalid model, output pointer, or token limit";
+                  return 1;
+              }
+              try {
+                  auto & engine = *static_cast<Engine *>(handle);
+                  std::lock_guard<std::mutex> guard(engine.mutex);
+                  engine.cancelled.store(false, std::memory_order_relaxed);
+                  auto tokens = tokenize(engine, prompt);
+                  if (tokens.size() + static_cast<size_t>(max_tokens) + 1 > llama_n_ctx(engine.context)) {
+                      last_error = "Conversation exceeds context; remove older turns and retry";
+                      return 3;
+                  }
+                  // Qwen3.5 has recurrent state. Re-prefill bounded history each turn;
+                  // never apply the demo application's KV context-shifting operations.
+                  llama_memory_clear(llama_get_memory(engine.context), true);
+                  for (size_t offset = 0; offset < tokens.size(); offset += BATCH_SIZE) {
+                      if (should_abort(&engine)) { last_error = "Cancelled"; return 2; }
+                      const int size = static_cast<int>(std::min<size_t>(BATCH_SIZE, tokens.size() - offset));
+                      if (llama_decode(engine.context, llama_batch_get_one(tokens.data() + offset, size)) != 0) {
+                          if (should_abort(&engine)) { last_error = "Cancelled"; return 2; }
+                          throw std::runtime_error("Prompt evaluation failed");
+                      }
+                  }
+                  const auto * vocab = llama_model_get_vocab(engine.model);
+                  using Sampler = std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>;
+                  Sampler sampler(llama_sampler_chain_init(llama_sampler_chain_default_params()), llama_sampler_free);
+                  if (!sampler) throw std::runtime_error("Sampler allocation failed");
+                  llama_sampler_chain_add(sampler.get(), llama_sampler_init_top_k(20));
+                  llama_sampler_chain_add(sampler.get(), llama_sampler_init_penalties(
+                      llama_vocab_n_tokens(vocab), 256, 1.0f, 0.0f, 1.5f));
+                  llama_sampler_chain_add(sampler.get(), llama_sampler_init_top_p(0.8f, 1));
+                  llama_sampler_chain_add(sampler.get(), llama_sampler_init_temp(0.7f));
+                  llama_sampler_chain_add(sampler.get(), llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+                  std::string reply;
+                  for (int i = 0; i < max_tokens; ++i) {
+                      if (should_abort(&engine)) { last_error = "Cancelled"; return 2; }
+                      auto token = llama_sampler_sample(sampler.get(), engine.context, -1);
+                      if (llama_vocab_is_eog(vocab, token)) break;
+                      reply += token_piece(vocab, token);
+                      if (i + 1 < max_tokens && llama_decode(engine.context, llama_batch_get_one(&token, 1)) != 0) {
+                          if (should_abort(&engine)) { last_error = "Cancelled"; return 2; }
+                          throw std::runtime_error("Token generation failed");
+                      }
+                  }
+                  if (should_abort(&engine)) { last_error = "Cancelled"; return 2; }
+                  trim_incomplete_utf8(reply);
+                  auto * result = static_cast<char *>(std::malloc(reply.size() + 1));
+                  if (!result) throw std::bad_alloc();
+                  std::memcpy(result, reply.data(), reply.size());
+                  result[reply.size()] = '\0';
+                  *output = result;
+                  return 0;
+              } catch (const std::exception & error) {
+                  last_error = error.what();
+              } catch (...) {
+                  last_error = "Unknown native inference error";
+              }
+              return 1;
+          }
+
+          QWEN_API void qwen811_cancel(void * handle) {
+              if (handle) static_cast<Engine *>(handle)->cancelled.store(true, std::memory_order_relaxed);
+          }
+
+          QWEN_API void qwen811_destroy(void * handle) {
+              // The Python owner must join its generation worker before calling this.
+              delete static_cast<Engine *>(handle);
+          }
+          VOICE811_SOURCE
+
+      - name: Build Android arm64 library
+        shell: bash
+        run: |
+          set -euo pipefail
+          QWEN_NDK_DIR="$ANDROID_HOME/ndk/$NDK_VERSION"
+          test -f "$QWEN_NDK_DIR/build/cmake/android.toolchain.cmake"
+          cmake -S native -B native-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QWEN_NDK_DIR/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_static \
+            -DLLAMA_SOURCE_DIR="$GITHUB_WORKSPACE/llama-source"
+          cmake --build native-build --target qwen811 --parallel 2
+          mkdir -p dist/Voice811-Qwen-Engine/libs/arm64-v8a
+          cp native-build/libqwen811.so dist/Voice811-Qwen-Engine/libs/arm64-v8a/
+          "$QWEN_NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+            --strip-unneeded dist/Voice811-Qwen-Engine/libs/arm64-v8a/libqwen811.so
+
+      - name: Include source and integration contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/Voice811-Qwen-Engine/source
+          cp native/qwen811.cpp native/CMakeLists.txt dist/Voice811-Qwen-Engine/source/
+          cp llama-source/LICENSE dist/Voice811-Qwen-Engine/LLAMA-LICENSE.txt
+          cat > dist/Voice811-Qwen-Engine/INTEGRATION.txt <<'VOICE811_CONTRACT'
+          Voice Assistant 811 - Local Qwen engine, stage 1
+
+          This bundle is not an APK. Do not install it as an app.
+          Next stage: package libs/arm64-v8a/libqwen811.so in the existing Buildozer APK,
+          add the Android document picker and the Python ctypes adapter.
+          GGUF is selected from device storage, then imported to app-private storage.
+          No GGUF, HTTP service, Termux, or browser is included in this engine.
+
+          Target: arm64-v8a, Android 9/API 28 or later. Inference has not run on a phone.
+          Use nativeLibraryDir/libqwen811.so, not an executable in writable app storage.
+          The engine statically links llama.cpp, ggml and the C++ runtime.
+          Only libc/libm/libdl and optional Android system libraries may be dynamic.
+
+          C ABI v1 (declare EVERY ctypes argtypes and restype before calling):
+            int qwen811_abi_version(void);
+            const char *qwen811_last_error(void);
+            void *qwen811_load(const char *gguf_path_utf8, int n_ctx, int n_threads);
+            int qwen811_token_count(void *handle, const char *formatted_prompt_utf8);
+            int qwen811_generate(void *handle, const char *formatted_prompt_utf8,
+                                 int max_tokens, char **output_utf8);
+            void qwen811_free_text(void *output_utf8);
+            void qwen811_cancel(void *handle);
+            void qwen811_destroy(void *handle);
+
+          qwen811_generate returns 0=success, 1=error, 2=cancelled, 3=context overflow.
+          It allocates output only on success. Always free it with qwen811_free_text.
+          Retrieve last_error on the SAME thread immediately after a failed operation.
+          Use c_void_p for handles/output allocation; do not truncate pointers to int.
+          Do not destroy a handle while generate, token_count or cancel is using it.
+          Load and generate run on a worker thread, never on Kivy/Android UI threads.
+          Join the worker before unloading. Cancellation interrupts CPU decoding.
+
+          Use the official Qwen3.5 text chat template with enable_thinking=false.
+          The caller supplies the COMPLETE formatted prompt, including bounded history.
+          Count tokens first, preserving the system prompt and newest user message.
+          If history plus max_tokens plus one exceeds context, remove oldest whole turns.
+          The engine clears recurrent memory and evaluates that prompt for each request.
+          It does not use KV shifting, implicit history, or a remote-provider fallback.
+          Recommended initial limits: context=2048, threads=4, max_tokens=256.
+
+          Source reference for the text-only chat template:
+          https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/chat_template.jinja
+          Model choice: Qwen3.5 2B GGUF Q4_K_M (weights NOT downloaded by this workflow).
+          See engine-manifest.json for exact source revision and build provenance.
+          VOICE811_CONTRACT
+
+      - name: Verify native binary and record provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'VOICE811_VERIFY'
+          import hashlib
+          import json
+          import os
+          import re
+          import struct
+          import subprocess
+          from pathlib import Path
+
+          out = Path("dist/Voice811-Qwen-Engine")
+          lib = out / "libs/arm64-v8a/libqwen811.so"
+          data = lib.read_bytes()
+          assert data[:4] == b"\x7fELF", "Expected an ELF library"
+          assert data[4] == 2 and data[5] == 1, "Expected 64-bit little-endian ELF"
+          assert struct.unpack_from("<H", data, 18)[0] == 183, "Expected AArch64"
+          dynamic = subprocess.check_output(["readelf", "-d", str(lib)], text=True)
+          needed = re.findall(r"\(NEEDED\).*?\[(.*?)\]", dynamic)
+          allowed = {"libc.so", "libm.so", "libdl.so", "liblog.so", "libandroid.so"}
+          assert not (set(needed) - allowed), f"Unexpected shared dependencies: {needed}"
+          symbols = subprocess.check_output(["nm", "-D", "--defined-only", str(lib)], text=True)
+          expected = ["qwen811_abi_version", "qwen811_last_error", "qwen811_load",
+                      "qwen811_token_count", "qwen811_generate", "qwen811_free_text",
+                      "qwen811_cancel", "qwen811_destroy"]
+          for symbol in expected:
+              assert re.search(r"\b" + symbol + r"$", symbols, re.MULTILINE), symbol
+          assert not list(out.rglob("*.gguf")), "Model files must never enter this bundle"
+          headers = subprocess.check_output(["readelf", "-lW", str(lib)], text=True)
+          alignments = [int(line.split()[-1], 16) for line in headers.splitlines()
+                        if line.strip().startswith("LOAD ")]
+          assert alignments and min(alignments) >= 16384, "Expected 16 KiB ELF alignment"
+          manifest = {
+              "project": "Voice Assistant 811", "stage": "native engine only",
+              "base_build": 157, "base_commit": os.environ["BASE_PROJECT_COMMIT"],
+              "workflow_commit": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"],
+              "llama_cpp_commit": os.environ["LLAMA_CPP_COMMIT"],
+              "ndk": os.environ["NDK_VERSION"], "abi": "arm64-v8a", "minimum_android_api": 28,
+              "c_abi_version": 1, "model": "Qwen3.5-2B", "quantization": "Q4_K_M",
+              "model_included": False, "runtime_http": False, "runtime": "in-process CPU",
+              "suggested_context": 2048, "suggested_threads": 4, "suggested_max_tokens": 256,
+              "shared_dependencies": needed, "exports": expected,
+              "library_sha256": hashlib.sha256(data).hexdigest(),
+              "validation": "ELF, exports, dependency and alignment checks; inference not run",
+          }
+          (out / "engine-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          (out / "SHA256SUMS").write_text(manifest["library_sha256"] + " libs/arm64-v8a/libqwen811.so\n")
+          print(json.dumps(manifest, indent=2))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("### Voice811 Local Qwen engine built\n"
+                            "Download **Voice811-Qwen-Engine-arm64** from Artifacts.\n\n"
+                            "This is the native engine for the existing Kivy app. "
+                            "It is not an APK and contains no GGUF model. "
+                            "App integration and device inference are the next stage.\n")
+          VOICE811_VERIFY
+
+      - name: Upload engine artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LocalAI-Android
-          path: llama.cpp/examples/llama.android/app/build/outputs/apk/debug/*.apk
+          name: Voice811-Qwen-Engine-arm64
+          path: dist/Voice811-Qwen-Engine/
+          if-no-files-found: error
+          retention-days: 30
