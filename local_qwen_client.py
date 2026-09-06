@@ -2,21 +2,28 @@ import ctypes
 import os
 import re
 import threading
+import time
 
+from kivy.clock import Clock
 from kivy.utils import platform
 
 
 class LocalQwenClient:
     """
-    In-process Local Qwen3.5 client for Voice Assistant 811.
+    Local Qwen3.5 client for Voice Assistant 811.
 
-    Runtime path:
-    Kivy/Python -> ctypes -> libqwen811.so -> llama.cpp -> GGUF
+    Android path:
+        Kivy/Python
+        -> Android document picker
+        -> persisted content URI / ParcelFileDescriptor
+        -> /proc/self/fd/<fd>
+        -> ctypes
+        -> libqwen811.so
+        -> llama.cpp
+        -> Qwen3.5 2B GGUF
 
-    No HTTP server, browser, Termux, or remote fallback is used.
-    The GGUF model itself is selected separately and must live in a normal
-    filesystem path (the Android picker stage will import it to app-private
-    storage before calling set_model_path()).
+    No HTTP server, browser, Termux, remote API fallback, or GGUF inside
+    the APK is used.
     """
 
     SYSTEM_PROMPT = (
@@ -31,6 +38,11 @@ class LocalQwenClient:
     MAX_TOKENS = 256
     ABI_VERSION = 1
 
+    PICK_MODEL_REQUEST_CODE = 8113
+    PREFS_NAME = "voice_assistant_811_private"
+    PREF_MODEL_URI = "local_qwen_model_uri"
+    PREF_MODEL_NAME = "local_qwen_model_name"
+
     def __init__(self):
         self.model_path = ""
         self.model_loaded = False
@@ -40,6 +52,27 @@ class LocalQwenClient:
         self._handle = None
         self._native_path = ""
         self._lock = threading.RLock()
+
+        self._android_activity_module = None
+        self._activity_result_bound = False
+        self._last_ui_runnable = None
+
+        self._model_pfd = None
+        self._model_uri = ""
+        self._model_name = ""
+
+        self._loading = False
+        self._picker_open = False
+        self._picker_declined = False
+        self._last_provider_choice = ""
+
+        self._provider_watch_event = None
+
+        if platform == "android":
+            Clock.schedule_once(
+                lambda dt: self._initialize_android_picker(),
+                0.80
+            )
 
     # =====================================================
     # PUBLIC STATE
@@ -51,6 +84,9 @@ class LocalQwenClient:
             and self._handle
             and self._lib is not None
         )
+
+    def is_loading(self):
+        return bool(self._loading)
 
     def native_engine_available(self):
         try:
@@ -66,17 +102,746 @@ class LocalQwenClient:
         except Exception:
             return ""
 
+    def get_model_name(self):
+        return self._model_name or os.path.basename(
+            self.model_path or ""
+        )
+
+    # =====================================================
+    # ANDROID PICKER INITIALIZATION
+    # =====================================================
+
+    def _initialize_android_picker(self):
+        if platform != "android":
+            return
+
+        try:
+            from android import activity as android_activity
+
+            self._android_activity_module = android_activity
+
+            if not self._activity_result_bound:
+                android_activity.bind(
+                    on_activity_result=self._on_activity_result
+                )
+                self._activity_result_bound = True
+
+            print("811: Local Qwen document picker READY")
+
+        except Exception as exc:
+            print(
+                "811: Local Qwen picker init error:",
+                repr(exc)
+            )
+
+        if self._provider_watch_event is None:
+            self._provider_watch_event = Clock.schedule_interval(
+                self._watch_provider_choice,
+                0.60
+            )
+
+    def _watch_provider_choice(self, dt):
+        if platform != "android":
+            return False
+
+        provider = self._read_provider_choice()
+
+        if provider != self._last_provider_choice:
+            if provider != "local_qwen":
+                self._picker_declined = False
+
+            self._last_provider_choice = provider
+
+        if provider != "local_qwen":
+            return True
+
+        if self.is_available():
+            return True
+
+        if self._loading or self._picker_open:
+            return True
+
+        saved_uri = self._load_saved_model_uri()
+
+        if saved_uri:
+            self._start_uri_load(
+                saved_uri,
+                persist=False
+            )
+            return True
+
+        if not self._picker_declined:
+            self.request_model_picker()
+
+        return True
+
+    def request_model_picker(self):
+        """
+        Open Android's system document picker.
+
+        This method is safe to call repeatedly; only one picker can be open.
+        """
+        if platform != "android":
+            return False
+
+        if self._picker_open:
+            return True
+
+        self._picker_open = True
+
+        self._notify_app(
+            "ready",
+            "اختر ملف Qwen3.5 2B Q4_K_M بصيغة GGUF."
+        )
+
+        def open_picker_on_ui():
+            try:
+                from jnius import autoclass
+
+                PythonActivity = autoclass(
+                    "org.kivy.android.PythonActivity"
+                )
+                Intent = autoclass(
+                    "android.content.Intent"
+                )
+
+                activity = PythonActivity.mActivity
+
+                if activity is None:
+                    raise RuntimeError(
+                        "Android Activity unavailable"
+                    )
+
+                intent = Intent(
+                    Intent.ACTION_OPEN_DOCUMENT
+                )
+                intent.addCategory(
+                    Intent.CATEGORY_OPENABLE
+                )
+                intent.setType("*/*")
+
+                intent.addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+                intent.addFlags(
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                )
+
+                activity.startActivityForResult(
+                    intent,
+                    int(self.PICK_MODEL_REQUEST_CODE)
+                )
+
+                print(
+                    "811: Local Qwen GGUF picker opened"
+                )
+
+            except Exception as exc:
+                self._picker_open = False
+                self._picker_declined = True
+
+                print(
+                    "811: Local Qwen picker open error:",
+                    repr(exc)
+                )
+
+                self._notify_app(
+                    "error",
+                    "تعذر فتح نافذة اختيار ملف Local Qwen."
+                )
+
+        self._run_on_android_ui(
+            open_picker_on_ui
+        )
+
+        return True
+
+    def _on_activity_result(
+        self,
+        request_code,
+        result_code,
+        data
+    ):
+        if int(request_code) != int(
+            self.PICK_MODEL_REQUEST_CODE
+        ):
+            return
+
+        self._picker_open = False
+
+        try:
+            from jnius import autoclass
+
+            Activity = autoclass(
+                "android.app.Activity"
+            )
+
+            if (
+                int(result_code)
+                != int(Activity.RESULT_OK)
+                or data is None
+            ):
+                self._picker_declined = True
+
+                self._notify_app(
+                    "ready",
+                    "لم يتم اختيار نموذج Local Qwen."
+                )
+
+                print(
+                    "811: Local Qwen picker cancelled"
+                )
+                return
+
+            uri = data.getData()
+
+            if uri is None:
+                raise RuntimeError(
+                    "Document picker returned no URI"
+                )
+
+            uri_string = str(
+                uri.toString()
+            )
+
+            model_name = self._query_uri_name(
+                uri
+            )
+
+            if (
+                not model_name
+                or not model_name.lower().endswith(
+                    ".gguf"
+                )
+            ):
+                self._picker_declined = True
+
+                self._notify_app(
+                    "error",
+                    "الملف المختار ليس ملف GGUF."
+                )
+                return
+
+            self._take_persistable_read_permission(
+                data,
+                uri
+            )
+
+            self._model_name = model_name
+            self._picker_declined = False
+
+            self._start_uri_load(
+                uri_string,
+                persist=True
+            )
+
+        except Exception as exc:
+            self._picker_declined = True
+
+            print(
+                "811: Local Qwen picker result error:",
+                repr(exc)
+            )
+
+            self._notify_app(
+                "error",
+                "تعذر قراءة ملف Local Qwen المختار."
+            )
+
+    # =====================================================
+    # CONTENT URI / FILE DESCRIPTOR
+    # =====================================================
+
+    def _start_uri_load(
+        self,
+        uri_string,
+        persist
+    ):
+        if self._loading:
+            return
+
+        self._loading = True
+
+        self._notify_app(
+            "thinking",
+            "جاري تحميل Local Qwen من ذاكرة الهاتف..."
+        )
+
+        threading.Thread(
+            target=self._load_from_uri_worker,
+            args=(
+                str(uri_string),
+                bool(persist)
+            ),
+            daemon=True
+        ).start()
+
+    def _load_from_uri_worker(
+        self,
+        uri_string,
+        persist
+    ):
+        try:
+            fd_path, pfd, model_name = (
+                self._open_uri_as_fd_path(
+                    uri_string
+                )
+            )
+
+            with self._lock:
+                self._close_model_descriptor_locked()
+                self._model_pfd = pfd
+                self._model_uri = uri_string
+
+                if model_name:
+                    self._model_name = model_name
+
+                self._destroy_locked()
+
+                self.model_path = fd_path
+                self.history = []
+
+            result = self.load_model()
+
+            if result.get(
+                "success"
+            ):
+                if persist:
+                    self._save_model_uri(
+                        uri_string,
+                        self._model_name
+                    )
+
+                self._notify_app(
+                    "ready",
+                    (
+                        "Local Qwen جاهز للعمل بدون إنترنت.\n"
+                        + (
+                            self._model_name
+                            or "Qwen3.5 2B"
+                        )
+                    )
+                )
+
+                print(
+                    "811: Local Qwen model LOADED:",
+                    self._model_name,
+                    self.model_path
+                )
+
+            else:
+                self._clear_saved_model_uri()
+                self._picker_declined = True
+
+                message = str(
+                    result.get(
+                        "message",
+                        "تعذر تحميل Local Qwen."
+                    )
+                )
+
+                self._notify_app(
+                    "error",
+                    message
+                )
+
+                print(
+                    "811: Local Qwen model load failed:",
+                    message
+                )
+
+        except Exception as exc:
+            self._clear_saved_model_uri()
+            self._picker_declined = True
+
+            print(
+                "811: Local Qwen URI load error:",
+                repr(exc)
+            )
+
+            self._notify_app(
+                "error",
+                (
+                    "تعذر فتح ملف Local Qwen من ذاكرة الهاتف.\n"
+                    + str(exc)
+                )
+            )
+
+        finally:
+            self._loading = False
+
+    def _open_uri_as_fd_path(
+        self,
+        uri_string
+    ):
+        from jnius import autoclass
+
+        PythonActivity = autoclass(
+            "org.kivy.android.PythonActivity"
+        )
+        Uri = autoclass(
+            "android.net.Uri"
+        )
+
+        activity = PythonActivity.mActivity
+
+        if activity is None:
+            raise RuntimeError(
+                "Android Activity unavailable"
+            )
+
+        resolver = activity.getContentResolver()
+        uri = Uri.parse(
+            str(uri_string)
+        )
+
+        pfd = resolver.openFileDescriptor(
+            uri,
+            "r"
+        )
+
+        if pfd is None:
+            raise RuntimeError(
+                "Android could not open the selected model"
+            )
+
+        fd = int(
+            pfd.getFd()
+        )
+
+        if fd < 0:
+            try:
+                pfd.close()
+            except Exception:
+                pass
+
+            raise RuntimeError(
+                "Invalid Android file descriptor"
+            )
+
+        fd_path = (
+            "/proc/self/fd/"
+            + str(fd)
+        )
+
+        if not os.path.exists(
+            fd_path
+        ):
+            try:
+                pfd.close()
+            except Exception:
+                pass
+
+            raise RuntimeError(
+                "Selected model is not exposed as a local file descriptor"
+            )
+
+        model_name = self._query_uri_name(
+            uri
+        )
+
+        if (
+            model_name
+            and not model_name.lower().endswith(
+                ".gguf"
+            )
+        ):
+            try:
+                pfd.close()
+            except Exception:
+                pass
+
+            raise RuntimeError(
+                "Selected file is not a GGUF model"
+            )
+
+        return (
+            fd_path,
+            pfd,
+            model_name
+        )
+
+    def _query_uri_name(
+        self,
+        uri
+    ):
+        if platform != "android":
+            return ""
+
+        cursor = None
+
+        try:
+            from jnius import autoclass
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+            OpenableColumns = autoclass(
+                "android.provider.OpenableColumns"
+            )
+
+            activity = PythonActivity.mActivity
+
+            if activity is None:
+                return ""
+
+            resolver = (
+                activity.getContentResolver()
+            )
+
+            cursor = resolver.query(
+                uri,
+                None,
+                None,
+                None,
+                None
+            )
+
+            if (
+                cursor is not None
+                and cursor.moveToFirst()
+            ):
+                index = cursor.getColumnIndex(
+                    OpenableColumns.DISPLAY_NAME
+                )
+
+                if index >= 0:
+                    value = cursor.getString(
+                        index
+                    )
+
+                    if value is not None:
+                        return str(value)
+
+        except Exception as exc:
+            print(
+                "811: Local Qwen URI name error:",
+                repr(exc)
+            )
+
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
+        try:
+            segment = uri.getLastPathSegment()
+
+            if segment is not None:
+                return str(segment)
+
+        except Exception:
+            pass
+
+        return ""
+
+    def _take_persistable_read_permission(
+        self,
+        data,
+        uri
+    ):
+        try:
+            from jnius import autoclass
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+            Intent = autoclass(
+                "android.content.Intent"
+            )
+
+            activity = PythonActivity.mActivity
+
+            if activity is None:
+                return
+
+            granted_flags = int(
+                data.getFlags()
+            )
+
+            read_flag = int(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+
+            flags = (
+                granted_flags
+                & read_flag
+            )
+
+            if not flags:
+                flags = read_flag
+
+            activity.getContentResolver().takePersistableUriPermission(
+                uri,
+                flags
+            )
+
+            print(
+                "811: Local Qwen URI permission persisted"
+            )
+
+        except Exception as exc:
+            # Current-session access can still work even when a provider does
+            # not support persistable URI permissions.
+            print(
+                "811: Persistable URI permission warning:",
+                repr(exc)
+            )
+
+    # =====================================================
+    # PREFERENCES
+    # =====================================================
+
+    def _get_preferences(self):
+        if platform != "android":
+            return None
+
+        try:
+            from jnius import autoclass
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            activity = PythonActivity.mActivity
+
+            if activity is None:
+                return None
+
+            return activity.getSharedPreferences(
+                self.PREFS_NAME,
+                0
+            )
+
+        except Exception:
+            return None
+
+    def _read_provider_choice(self):
+        prefs = self._get_preferences()
+
+        if prefs is None:
+            return ""
+
+        try:
+            return str(
+                prefs.getString(
+                    "ai_provider_choice",
+                    ""
+                )
+                or ""
+            ).strip().lower()
+
+        except Exception:
+            return ""
+
+    def _save_model_uri(
+        self,
+        uri_string,
+        model_name
+    ):
+        prefs = self._get_preferences()
+
+        if prefs is None:
+            return
+
+        try:
+            editor = prefs.edit()
+
+            editor.putString(
+                self.PREF_MODEL_URI,
+                str(uri_string)
+            )
+            editor.putString(
+                self.PREF_MODEL_NAME,
+                str(model_name or "")
+            )
+
+            editor.apply()
+
+        except Exception as exc:
+            print(
+                "811: Local Qwen URI save error:",
+                repr(exc)
+            )
+
+    def _load_saved_model_uri(self):
+        prefs = self._get_preferences()
+
+        if prefs is None:
+            return ""
+
+        try:
+            uri_string = str(
+                prefs.getString(
+                    self.PREF_MODEL_URI,
+                    ""
+                )
+                or ""
+            ).strip()
+
+            saved_name = str(
+                prefs.getString(
+                    self.PREF_MODEL_NAME,
+                    ""
+                )
+                or ""
+            ).strip()
+
+            if saved_name:
+                self._model_name = saved_name
+
+            return uri_string
+
+        except Exception:
+            return ""
+
+    def _clear_saved_model_uri(self):
+        prefs = self._get_preferences()
+
+        if prefs is None:
+            return
+
+        try:
+            editor = prefs.edit()
+
+            editor.remove(
+                self.PREF_MODEL_URI
+            )
+            editor.remove(
+                self.PREF_MODEL_NAME
+            )
+
+            editor.apply()
+
+        except Exception:
+            pass
+
     # =====================================================
     # MODEL PATH / LIFECYCLE
     # =====================================================
 
     def set_model_path(self, model_path):
-        model_path = str(model_path or "").strip()
+        """
+        Regular filesystem-path entry point kept for non-URI callers/tests.
+        Android's normal flow uses the document picker and /proc/self/fd.
+        """
+        model_path = str(
+            model_path or ""
+        ).strip()
 
         if not model_path:
             return False
 
-        if not model_path.lower().endswith(".gguf"):
+        if (
+            not model_path.lower().endswith(
+                ".gguf"
+            )
+            and not model_path.startswith(
+                "/proc/self/fd/"
+            )
+        ):
             return False
 
         with self._lock:
@@ -94,25 +859,22 @@ class LocalQwenClient:
 
     def load_model(self):
         """
-        Load Qwen3.5 2B Q4_K_M from self.model_path.
+        Load Qwen3.5 2B Q4_K_M.
 
-        This performs heavy native work and should be called from a worker
-        thread, never from the Kivy/Android UI thread.
+        Heavy native work: call only from a worker thread.
         """
         with self._lock:
             if not self.model_path:
                 return {
                     "success": False,
-                    "message": "لم يتم اختيار ملف Qwen بصيغة GGUF بعد."
+                    "message": (
+                        "لم يتم اختيار ملف Qwen بصيغة GGUF بعد."
+                    )
                 }
 
-            if not self.model_path.lower().endswith(".gguf"):
-                return {
-                    "success": False,
-                    "message": "الملف المختار ليس ملف GGUF."
-                }
-
-            if not os.path.isfile(self.model_path):
+            if not os.path.exists(
+                self.model_path
+            ):
                 return {
                     "success": False,
                     "message": (
@@ -123,8 +885,10 @@ class LocalQwenClient:
 
             try:
                 self._ensure_native_library()
+
             except Exception as exc:
                 self.model_loaded = False
+
                 return {
                     "success": False,
                     "message": (
@@ -148,6 +912,7 @@ class LocalQwenClient:
 
             if not handle_value:
                 self.model_loaded = False
+
                 return {
                     "success": False,
                     "message": self._friendly_native_error(
@@ -172,10 +937,33 @@ class LocalQwenClient:
     def unload_model(self):
         with self._lock:
             self._destroy_locked()
+            self._close_model_descriptor_locked()
             self.history = []
 
     def close(self):
         self.unload_model()
+
+        if self._provider_watch_event is not None:
+            try:
+                self._provider_watch_event.cancel()
+            except Exception:
+                pass
+
+            self._provider_watch_event = None
+
+        if (
+            self._activity_result_bound
+            and self._android_activity_module
+            is not None
+        ):
+            try:
+                self._android_activity_module.unbind(
+                    on_activity_result=self._on_activity_result
+                )
+            except Exception:
+                pass
+
+            self._activity_result_bound = False
 
     # =====================================================
     # CHAT
@@ -189,12 +977,44 @@ class LocalQwenClient:
         if not user_text:
             return "لم أستلم نصاً واضحاً."
 
-        with self._lock:
-            if not self.is_available():
+        if not self.is_available():
+            if platform == "android":
+                if not self._loading:
+                    saved_uri = (
+                        self._load_saved_model_uri()
+                    )
+
+                    if saved_uri:
+                        self._start_uri_load(
+                            saved_uri,
+                            persist=False
+                        )
+                    elif not self._picker_open:
+                        Clock.schedule_once(
+                            lambda dt:
+                            self.request_model_picker(),
+                            0
+                        )
+
+            if self._loading:
                 return (
-                    "Local Qwen غير محمّل بعد. "
-                    "اختر ملف Qwen3.5 2B GGUF ثم انتظر اكتمال التحميل."
+                    "جاري تحميل Local Qwen. "
+                    "انتظر قليلاً ثم تحدث مرة أخرى."
                 )
+
+            if self._picker_open:
+                return (
+                    "اختر ملف Qwen3.5 2B Q4_K_M "
+                    "من نافذة الملفات أولاً."
+                )
+
+            return (
+                "Local Qwen غير محمّل بعد. "
+                "اختر ملف Qwen3.5 2B Q4_K_M بصيغة GGUF."
+            )
+
+        with self._lock:
+            self._sync_history_with_visible_chat()
 
             prompt, fitted_history = (
                 self._fit_prompt_to_context(
@@ -210,17 +1030,39 @@ class LocalQwenClient:
 
             output_ptr = ctypes.c_void_p()
 
-            status = self._lib.qwen811_generate(
-                self._handle,
-                prompt.encode(
-                    "utf-8",
-                    errors="strict"
-                ),
-                int(self.MAX_TOKENS),
-                ctypes.byref(
-                    output_ptr
-                )
+            cancel_watch_stop = (
+                threading.Event()
             )
+
+            request_serial = (
+                self._current_app_request_serial()
+            )
+
+            cancel_watch = threading.Thread(
+                target=self._cancel_watchdog,
+                args=(
+                    request_serial,
+                    cancel_watch_stop
+                ),
+                daemon=True
+            )
+            cancel_watch.start()
+
+            try:
+                status = self._lib.qwen811_generate(
+                    self._handle,
+                    prompt.encode(
+                        "utf-8",
+                        errors="strict"
+                    ),
+                    int(self.MAX_TOKENS),
+                    ctypes.byref(
+                        output_ptr
+                    )
+                )
+
+            finally:
+                cancel_watch_stop.set()
 
             if status != 0:
                 native_error = (
@@ -252,6 +1094,7 @@ class LocalQwenClient:
                     "utf-8",
                     errors="replace"
                 )
+
             finally:
                 self._lib.qwen811_free_text(
                     output_ptr
@@ -280,8 +1123,6 @@ class LocalQwenClient:
                 ]
             )
 
-            # Six full user/assistant turns is a conservative hard bound for
-            # the initial 2048-token mobile configuration.
             self._trim_history_turns(
                 max_turns=6
             )
@@ -294,10 +1135,7 @@ class LocalQwenClient:
 
     def cancel(self):
         """
-        Cancellation is intentionally lock-free.
-
-        The native engine uses an atomic cancellation flag, so this call can
-        interrupt qwen811_generate() while another worker owns self._lock.
+        Native cancellation is lock-free by design.
         """
         lib = self._lib
         handle = self._handle
@@ -316,6 +1154,134 @@ class LocalQwenClient:
             pass
 
     # =====================================================
+    # MAIN-APP COOPERATION WITHOUT MODIFYING main.py
+    # =====================================================
+
+    def _current_app_request_serial(self):
+        try:
+            from kivy.app import App
+
+            app = App.get_running_app()
+
+            if app is None:
+                return None
+
+            return int(
+                getattr(
+                    app,
+                    "_request_serial",
+                    0
+                )
+            )
+
+        except Exception:
+            return None
+
+    def _cancel_watchdog(
+        self,
+        request_serial,
+        stop_event
+    ):
+        if request_serial is None:
+            return
+
+        while not stop_event.wait(
+            0.10
+        ):
+            try:
+                from kivy.app import App
+
+                app = App.get_running_app()
+
+                if app is None:
+                    continue
+
+                current = int(
+                    getattr(
+                        app,
+                        "_request_serial",
+                        request_serial
+                    )
+                )
+
+                if current != int(
+                    request_serial
+                ):
+                    self.cancel()
+                    return
+
+            except Exception:
+                return
+
+    def _sync_history_with_visible_chat(self):
+        """
+        The existing main.py Clear button resets visible chat but does not yet
+        know about LocalQwenClient.clear_history(). Detect the first visible
+        turn after a reset so local history is reset too, without touching the
+        stable main.py.
+        """
+        try:
+            from kivy.app import App
+
+            app = App.get_running_app()
+
+            if app is None:
+                return
+
+            rows = getattr(
+                app,
+                "_chat_rows",
+                None
+            )
+
+            if (
+                rows is not None
+                and len(rows) <= 2
+            ):
+                self.history = []
+
+        except Exception:
+            pass
+
+    def _notify_app(
+        self,
+        state,
+        message
+    ):
+        message = str(
+            message or ""
+        )
+
+        def apply_state(dt):
+            try:
+                from kivy.app import App
+
+                app = App.get_running_app()
+
+                if (
+                    app is not None
+                    and hasattr(
+                        app,
+                        "set_state"
+                    )
+                ):
+                    app.set_state(
+                        state,
+                        message
+                    )
+
+            except Exception as exc:
+                print(
+                    "811: Local Qwen UI notify error:",
+                    repr(exc)
+                )
+
+        Clock.schedule_once(
+            apply_state,
+            0
+        )
+
+    # =====================================================
     # QWEN3.5 TEXT CHAT TEMPLATE
     # =====================================================
 
@@ -324,9 +1290,6 @@ class LocalQwenClient:
         user_text,
         history=None
     ):
-        """
-        Text-only Qwen3.5 chat template, with thinking disabled.
-        """
         if history is None:
             history = self.history
 
@@ -338,11 +1301,17 @@ class LocalQwenClient:
 
         for message in history:
             role = str(
-                message.get("role", "")
+                message.get(
+                    "role",
+                    ""
+                )
             ).strip().lower()
 
             content = self._clean_text(
-                message.get("content", "")
+                message.get(
+                    "content",
+                    ""
+                )
             )
 
             if (
@@ -412,7 +1381,10 @@ class LocalQwenClient:
                 + 1
                 <= int(self.CONTEXT_SIZE)
             ):
-                return prompt, history
+                return (
+                    prompt,
+                    history
+                )
 
             if not history:
                 return None, []
@@ -548,10 +1520,10 @@ class LocalQwenClient:
                         candidate
                     ):
                         return candidate
+
             except Exception:
                 pass
 
-        # Developer/non-Android fallback matching the repository layout.
         base_dir = os.path.dirname(
             os.path.abspath(__file__)
         )
@@ -592,7 +1564,9 @@ class LocalQwenClient:
                     errors="replace"
                 ).strip()
 
-            return str(raw).strip()
+            return str(
+                raw
+            ).strip()
 
         except Exception:
             return ""
@@ -612,6 +1586,89 @@ class LocalQwenClient:
         self._handle = None
         self.model_loaded = False
 
+    def _close_model_descriptor_locked(self):
+        pfd = self._model_pfd
+        self._model_pfd = None
+
+        if pfd is not None:
+            try:
+                pfd.close()
+            except Exception:
+                pass
+
+        self.model_path = ""
+        self._model_uri = ""
+
+    # =====================================================
+    # ANDROID UI THREAD
+    # =====================================================
+
+    def _run_on_android_ui(
+        self,
+        func
+    ):
+        if platform != "android":
+            func()
+            return
+
+        try:
+            from jnius import (
+                PythonJavaClass,
+                autoclass,
+                java_method
+            )
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            activity = PythonActivity.mActivity
+
+            if activity is None:
+                raise RuntimeError(
+                    "Android Activity unavailable"
+                )
+
+            outer = self
+
+            class UiRunnable(
+                PythonJavaClass
+            ):
+                __javainterfaces__ = [
+                    "java/lang/Runnable"
+                ]
+                __javacontext__ = "app"
+
+                @java_method("()V")
+                def run(self):
+                    try:
+                        func()
+                    except Exception as exc:
+                        outer._picker_open = False
+
+                        print(
+                            "811: Local Qwen UI runnable error:",
+                            repr(exc)
+                        )
+
+            runnable = UiRunnable()
+
+            self._last_ui_runnable = (
+                runnable
+            )
+
+            activity.runOnUiThread(
+                runnable
+            )
+
+        except Exception as exc:
+            self._picker_open = False
+
+            print(
+                "811: Local Qwen runOnUiThread error:",
+                repr(exc)
+            )
+
     # =====================================================
     # HISTORY
     # =====================================================
@@ -629,8 +1686,12 @@ class LocalQwenClient:
 
         if (
             len(history) >= 2
-            and history[0].get("role") == "user"
-            and history[1].get("role") == "assistant"
+            and history[0].get(
+                "role"
+            ) == "user"
+            and history[1].get(
+                "role"
+            ) == "assistant"
         ):
             return history[2:]
 
@@ -655,7 +1716,7 @@ class LocalQwenClient:
             )
 
     # =====================================================
-    # OUTPUT / ERROR CLEANING
+    # OUTPUT / ERRORS
     # =====================================================
 
     def clean_model_output(
@@ -706,50 +1767,36 @@ class LocalQwenClient:
 
         lower = error.lower()
 
-        if (
-            "qwen35 architecture"
-            in lower
-        ):
+        if "qwen35 architecture" in lower:
             return (
                 "الملف ليس نموذج Qwen3.5 الصحيح. "
                 "اختر Qwen3.5 2B بصيغة GGUF."
             )
 
         if (
-            "q4_k_m"
-            in lower
-            or "quantization"
-            in lower
+            "q4_k_m" in lower
+            or "quantization" in lower
         ):
             return (
                 "اختر نسخة Qwen3.5 2B بتكميم Q4_K_M."
             )
 
-        if (
-            "2b model size"
-            in lower
-        ):
+        if "2b model size" in lower:
             return (
                 "اختر نموذج Qwen3.5 بحجم 2B."
             )
 
         if (
-            "available memory"
-            in lower
-            or "insufficient memory"
-            in lower
-            or "allocation failed"
-            in lower
+            "available memory" in lower
+            or "insufficient memory" in lower
+            or "allocation failed" in lower
         ):
             return (
                 "ذاكرة الهاتف غير كافية لتحميل Local Qwen حالياً. "
                 "أغلق التطبيقات الأخرى ثم حاول مرة أخرى."
             )
 
-        if (
-            "conversation exceeds context"
-            in lower
-        ):
+        if "conversation exceeds context" in lower:
             return (
                 "المحادثة طويلة على الذاكرة المحلية. "
                 "امسح المحادثة أو اختصرها ثم حاول مرة أخرى."
