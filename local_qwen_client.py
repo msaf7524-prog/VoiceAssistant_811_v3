@@ -15,8 +15,9 @@ class LocalQwenClient:
     Android path:
         Kivy/Python
         -> Android document picker
-        -> persisted content URI / ParcelFileDescriptor
-        -> /proc/self/fd/<fd>
+        -> selected content URI
+        -> one-time import to app-private storage
+        -> real local GGUF filesystem path
         -> ctypes
         -> libqwen811.so
         -> llama.cpp
@@ -42,6 +43,7 @@ class LocalQwenClient:
     PREFS_NAME = "voice_assistant_811_private"
     PREF_MODEL_URI = "local_qwen_model_uri"
     PREF_MODEL_NAME = "local_qwen_model_name"
+    PREF_MODEL_PATH = "local_qwen_model_path"
 
     def __init__(self):
         self.model_path = ""
@@ -60,6 +62,7 @@ class LocalQwenClient:
         self._model_pfd = None
         self._model_uri = ""
         self._model_name = ""
+        self._model_private_path = ""
 
         self._loading = False
         self._picker_open = False
@@ -161,12 +164,22 @@ class LocalQwenClient:
         if self._loading or self._picker_open:
             return True
 
+        saved_path = self._load_saved_model_path()
+
+        if saved_path:
+            self._start_private_path_load(
+                saved_path
+            )
+            return True
+
         saved_uri = self._load_saved_model_uri()
 
         if saved_uri:
+            # Migration/fallback: older test builds only saved the URI.
+            # Import it once into app-private storage before llama.cpp loads it.
             self._start_uri_load(
                 saved_uri,
-                persist=False
+                persist=True
             )
             return True
 
@@ -349,7 +362,7 @@ class LocalQwenClient:
             )
 
     # =====================================================
-    # CONTENT URI / FILE DESCRIPTOR
+    # CONTENT URI / PRIVATE MODEL IMPORT
     # =====================================================
 
     def _start_uri_load(
@@ -382,24 +395,28 @@ class LocalQwenClient:
         persist
     ):
         try:
-            fd_path, pfd, model_name = (
-                self._open_uri_as_fd_path(
+            private_path, model_name = (
+                self._import_uri_to_private_file(
                     uri_string
                 )
             )
 
             with self._lock:
                 self._close_model_descriptor_locked()
-                self._model_pfd = pfd
                 self._model_uri = uri_string
+                self._model_private_path = private_path
 
                 if model_name:
                     self._model_name = model_name
 
                 self._destroy_locked()
-
-                self.model_path = fd_path
+                self.model_path = private_path
                 self.history = []
+
+            self._notify_app(
+                "thinking",
+                "تم تجهيز ملف النموذج. جاري تشغيل Local Qwen..."
+            )
 
             result = self.load_model()
 
@@ -409,7 +426,8 @@ class LocalQwenClient:
                 if persist:
                     self._save_model_uri(
                         uri_string,
-                        self._model_name
+                        self._model_name,
+                        private_path
                     )
 
                 self._notify_app(
@@ -455,14 +473,14 @@ class LocalQwenClient:
             self._picker_declined = True
 
             print(
-                "811: Local Qwen URI load error:",
+                "811: Local Qwen import/load error:",
                 repr(exc)
             )
 
             self._notify_app(
                 "error",
                 (
-                    "تعذر فتح ملف Local Qwen من ذاكرة الهاتف.\n"
+                    "تعذر تجهيز ملف Local Qwen.\n"
                     + str(exc)
                 )
             )
@@ -470,10 +488,120 @@ class LocalQwenClient:
         finally:
             self._loading = False
 
-    def _open_uri_as_fd_path(
+    def _start_private_path_load(
+        self,
+        model_path
+    ):
+        if self._loading:
+            return
+
+        model_path = str(
+            model_path or ""
+        ).strip()
+
+        if (
+            not model_path
+            or not os.path.isfile(
+                model_path
+            )
+        ):
+            self._clear_saved_model_uri()
+            return
+
+        self._loading = True
+
+        self._notify_app(
+            "thinking",
+            "جاري تشغيل Local Qwen من الملف المحلي..."
+        )
+
+        threading.Thread(
+            target=self._load_private_path_worker,
+            args=(model_path,),
+            daemon=True
+        ).start()
+
+    def _load_private_path_worker(
+        self,
+        model_path
+    ):
+        try:
+            with self._lock:
+                self._destroy_locked()
+                self.model_path = str(
+                    model_path
+                )
+                self._model_private_path = (
+                    self.model_path
+                )
+                self.history = []
+
+            result = self.load_model()
+
+            if result.get(
+                "success"
+            ):
+                self._notify_app(
+                    "ready",
+                    (
+                        "Local Qwen جاهز للعمل بدون إنترنت.\n"
+                        + (
+                            self._model_name
+                            or "Qwen3.5 2B"
+                        )
+                    )
+                )
+
+                print(
+                    "811: Local Qwen restored from private file:",
+                    self.model_path
+                )
+
+            else:
+                self._clear_saved_model_uri()
+                self._picker_declined = True
+
+                self._notify_app(
+                    "error",
+                    str(
+                        result.get(
+                            "message",
+                            "تعذر تحميل Local Qwen."
+                        )
+                    )
+                )
+
+        except Exception as exc:
+            self._clear_saved_model_uri()
+            self._picker_declined = True
+
+            print(
+                "811: Local Qwen private-path load error:",
+                repr(exc)
+            )
+
+            self._notify_app(
+                "error",
+                (
+                    "تعذر تشغيل ملف Local Qwen المحلي.\n"
+                    + str(exc)
+                )
+            )
+
+        finally:
+            self._loading = False
+
+    def _import_uri_to_private_file(
         self,
         uri_string
     ):
+        """
+        Copy the selected Android document into app-private storage.
+
+        llama.cpp's mmap loader needs a real regular filesystem file. Passing
+        /proc/self/fd/<n> from a document provider can fail even when the phone
+        has plenty of RAM, so the picker URI is used only as the import source.
+        """
         from jnius import autoclass
 
         PythonActivity = autoclass(
@@ -495,6 +623,20 @@ class LocalQwenClient:
             str(uri_string)
         )
 
+        model_name = self._query_uri_name(
+            uri
+        )
+
+        if (
+            not model_name
+            or not model_name.lower().endswith(
+                ".gguf"
+            )
+        ):
+            raise RuntimeError(
+                "الملف المختار ليس ملف GGUF."
+            )
+
         pfd = resolver.openFileDescriptor(
             uri,
             "r"
@@ -502,64 +644,201 @@ class LocalQwenClient:
 
         if pfd is None:
             raise RuntimeError(
-                "Android could not open the selected model"
+                "تعذر فتح ملف النموذج المختار."
             )
 
-        fd = int(
-            pfd.getFd()
-        )
+        source_fd = -1
+        source_copy_fd = -1
 
-        if fd < 0:
+        try:
+            source_fd = int(
+                pfd.getFd()
+            )
+
+            if source_fd < 0:
+                raise RuntimeError(
+                    "تعذر قراءة ملف النموذج المختار."
+                )
+
+            try:
+                source_size = int(
+                    pfd.getStatSize()
+                )
+            except Exception:
+                source_size = -1
+
+            files_dir = str(
+                activity
+                .getFilesDir()
+                .getAbsolutePath()
+            )
+
+            private_dir = os.path.join(
+                files_dir,
+                "local_qwen"
+            )
+
+            os.makedirs(
+                private_dir,
+                exist_ok=True
+            )
+
+            final_path = os.path.join(
+                private_dir,
+                "qwen3_5_2b_q4_k_m.gguf"
+            )
+            temp_path = (
+                final_path
+                + ".part"
+            )
+
+            if source_size > 0:
+                try:
+                    stats = os.statvfs(
+                        private_dir
+                    )
+                    free_bytes = (
+                        int(stats.f_bavail)
+                        * int(stats.f_frsize)
+                    )
+
+                    required_bytes = (
+                        source_size
+                        + (96 * 1024 * 1024)
+                    )
+
+                    if free_bytes < required_bytes:
+                        raise RuntimeError(
+                            "المساحة التخزينية غير كافية لنسخ نموذج Local Qwen."
+                        )
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+
+            self._notify_app(
+                "thinking",
+                (
+                    "جاري استيراد ملف Local Qwen إلى مساحة التطبيق...\n"
+                    "قد يستغرق ذلك دقيقة أو أكثر في المرة الأولى."
+                )
+            )
+
+            try:
+                if os.path.exists(
+                    temp_path
+                ):
+                    os.remove(
+                        temp_path
+                    )
+            except Exception:
+                pass
+
+            source_copy_fd = os.dup(
+                source_fd
+            )
+
+            copied = 0
+            chunk_size = (
+                4 * 1024 * 1024
+            )
+
+            with os.fdopen(
+                source_copy_fd,
+                "rb",
+                buffering=0
+            ) as source:
+                source_copy_fd = -1
+
+                with open(
+                    temp_path,
+                    "wb",
+                    buffering=0
+                ) as target:
+                    while True:
+                        chunk = source.read(
+                            chunk_size
+                        )
+
+                        if not chunk:
+                            break
+
+                        target.write(
+                            chunk
+                        )
+                        copied += len(
+                            chunk
+                        )
+
+                    target.flush()
+
+                    try:
+                        os.fsync(
+                            target.fileno()
+                        )
+                    except Exception:
+                        pass
+
+            if copied <= 0:
+                raise RuntimeError(
+                    "تم اختيار ملف فارغ."
+                )
+
+            if (
+                source_size > 0
+                and copied != source_size
+            ):
+                raise RuntimeError(
+                    "لم يكتمل نسخ ملف النموذج. حاول مرة أخرى."
+                )
+
+            with open(
+                temp_path,
+                "rb"
+            ) as check:
+                magic = check.read(
+                    4
+                )
+
+            if magic != b"GGUF":
+                raise RuntimeError(
+                    "الملف المختار ليس نموذج GGUF صالحاً."
+                )
+
+            os.replace(
+                temp_path,
+                final_path
+            )
+
+            self._model_private_path = (
+                final_path
+            )
+
+            print(
+                "811: Local Qwen model imported:",
+                final_path,
+                copied,
+                "bytes"
+            )
+
+            return (
+                final_path,
+                model_name
+            )
+
+        finally:
+            if source_copy_fd >= 0:
+                try:
+                    os.close(
+                        source_copy_fd
+                    )
+                except Exception:
+                    pass
+
             try:
                 pfd.close()
             except Exception:
                 pass
-
-            raise RuntimeError(
-                "Invalid Android file descriptor"
-            )
-
-        fd_path = (
-            "/proc/self/fd/"
-            + str(fd)
-        )
-
-        if not os.path.exists(
-            fd_path
-        ):
-            try:
-                pfd.close()
-            except Exception:
-                pass
-
-            raise RuntimeError(
-                "Selected model is not exposed as a local file descriptor"
-            )
-
-        model_name = self._query_uri_name(
-            uri
-        )
-
-        if (
-            model_name
-            and not model_name.lower().endswith(
-                ".gguf"
-            )
-        ):
-            try:
-                pfd.close()
-            except Exception:
-                pass
-
-            raise RuntimeError(
-                "Selected file is not a GGUF model"
-            )
-
-        return (
-            fd_path,
-            pfd,
-            model_name
-        )
 
     def _query_uri_name(
         self,
@@ -739,7 +1018,8 @@ class LocalQwenClient:
     def _save_model_uri(
         self,
         uri_string,
-        model_name
+        model_name,
+        model_path=""
     ):
         prefs = self._get_preferences()
 
@@ -751,20 +1031,70 @@ class LocalQwenClient:
 
             editor.putString(
                 self.PREF_MODEL_URI,
-                str(uri_string)
+                str(uri_string or "")
             )
             editor.putString(
                 self.PREF_MODEL_NAME,
                 str(model_name or "")
+            )
+            editor.putString(
+                self.PREF_MODEL_PATH,
+                str(
+                    model_path
+                    or self._model_private_path
+                    or ""
+                )
             )
 
             editor.apply()
 
         except Exception as exc:
             print(
-                "811: Local Qwen URI save error:",
+                "811: Local Qwen selection save error:",
                 repr(exc)
             )
+
+    def _load_saved_model_path(self):
+        prefs = self._get_preferences()
+
+        if prefs is None:
+            return ""
+
+        try:
+            saved_path = str(
+                prefs.getString(
+                    self.PREF_MODEL_PATH,
+                    ""
+                )
+                or ""
+            ).strip()
+
+            saved_name = str(
+                prefs.getString(
+                    self.PREF_MODEL_NAME,
+                    ""
+                )
+                or ""
+            ).strip()
+
+            if saved_name:
+                self._model_name = saved_name
+
+            if (
+                saved_path
+                and os.path.isfile(
+                    saved_path
+                )
+            ):
+                self._model_private_path = (
+                    saved_path
+                )
+                return saved_path
+
+            return ""
+
+        except Exception:
+            return ""
 
     def _load_saved_model_uri(self):
         prefs = self._get_preferences()
@@ -812,6 +1142,9 @@ class LocalQwenClient:
             editor.remove(
                 self.PREF_MODEL_NAME
             )
+            editor.remove(
+                self.PREF_MODEL_PATH
+            )
 
             editor.apply()
 
@@ -825,7 +1158,7 @@ class LocalQwenClient:
     def set_model_path(self, model_path):
         """
         Regular filesystem-path entry point kept for non-URI callers/tests.
-        Android's normal flow uses the document picker and /proc/self/fd.
+        Android's normal flow imports the picker URI into app-private storage.
         """
         model_path = str(
             model_path or ""
@@ -834,13 +1167,8 @@ class LocalQwenClient:
         if not model_path:
             return False
 
-        if (
-            not model_path.lower().endswith(
-                ".gguf"
-            )
-            and not model_path.startswith(
-                "/proc/self/fd/"
-            )
+        if not model_path.lower().endswith(
+            ".gguf"
         ):
             return False
 
@@ -1787,13 +2115,18 @@ class LocalQwenClient:
             )
 
         if (
-            "available memory" in lower
-            or "insufficient memory" in lower
+            "insufficient memory" in lower
             or "allocation failed" in lower
         ):
             return (
-                "ذاكرة الهاتف غير كافية لتحميل Local Qwen حالياً. "
+                "ذاكرة RAM المتاحة غير كافية لتحميل Local Qwen حالياً. "
                 "أغلق التطبيقات الأخرى ثم حاول مرة أخرى."
+            )
+
+        if "gguf load failed" in lower:
+            return (
+                "تعذر فتح نموذج GGUF داخل المحرك. "
+                "سيتم استخدام نسخة محلية داخل مساحة التطبيق في النسخة المصححة."
             )
 
         if "conversation exceeds context" in lower:
