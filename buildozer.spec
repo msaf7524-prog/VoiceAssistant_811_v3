@@ -18,7 +18,7 @@ services = backgroundcore:background_core.py:foreground:sticky:foregroundService
 
 android.permissions = RECORD_AUDIO,INTERNET,ACCESS_NETWORK_STATE,MODIFY_AUDIO_SETTINGS,BLUETOOTH,BLUETOOTH_ADMIN,BLUETOOTH_CONNECT,BLUETOOTH_SCAN,POST_NOTIFICATIONS,FOREGROUND_SERVICE,FOREGROUND_SERVICE_MICROPHONE
 
-android.archs = arm64-v8a,armeabi-v7a
+android.archs = arm64-v8a
 
 android.add_libs_arm64_v8a = libs/arm64-v8a/libqwen811.so
 
@@ -28,7 +28,7 @@ fullscreen = 0
 
 android.api = 33
 
-android.minapi = 21
+android.minapi = 28
 
 android.accept_sdk_license = True
 
