@@ -1,0 +1,814 @@
+name: Build Local Whisper Engine
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice811-whisper-engine-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WHISPER_CPP_COMMIT: "52a939a2a762224e255d366c1182b2af4dd1a032"
+  NDK_VERSION: "29.0.13113456"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  build-engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Read pinned whisper.cpp source
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: ${{ env.WHISPER_CPP_COMMIT }}
+          path: whisper-source
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android NDK and native build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "ndk;$NDK_VERSION"
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build binutils
+          test -f "whisper-source/include/whisper.h"
+          test "$(git -C whisper-source rev-parse HEAD)" = "$WHISPER_CPP_COMMIT"
+
+      - name: Write Voice811 Whisper native wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p native
+
+          cat > native/CMakeLists.txt <<'VOICE811_CMAKE'
+          cmake_minimum_required(VERSION 3.22)
+          project(whisper811 LANGUAGES C CXX)
+
+          set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+          set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+          set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+          set(WHISPER_CURL OFF CACHE BOOL "" FORCE)
+          set(WHISPER_SDL2 OFF CACHE BOOL "" FORCE)
+          set(WHISPER_COREML OFF CACHE BOOL "" FORCE)
+          set(WHISPER_OPENVINO OFF CACHE BOOL "" FORCE)
+          set(WHISPER_VITISAI OFF CACHE BOOL "" FORCE)
+          set(WHISPER_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+
+          set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+          set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+          set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+          set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
+          set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
+          set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+          if(NOT DEFINED WHISPER_SOURCE_DIR)
+              message(FATAL_ERROR "WHISPER_SOURCE_DIR is required")
+          endif()
+
+          add_subdirectory("${WHISPER_SOURCE_DIR}" whisper-build)
+
+          add_library(whisper811 SHARED whisper811.cpp)
+          target_include_directories(
+              whisper811
+              PRIVATE
+              "${WHISPER_SOURCE_DIR}/include"
+          )
+          target_link_libraries(whisper811 PRIVATE whisper)
+
+          set_target_properties(
+              whisper811
+              PROPERTIES
+              CXX_VISIBILITY_PRESET hidden
+              VISIBILITY_INLINES_HIDDEN YES
+          )
+
+          if(ANDROID)
+              target_link_options(
+                  whisper811
+                  PRIVATE
+                  "-Wl,--exclude-libs,ALL"
+                  "-Wl,-z,defs"
+                  "-Wl,-z,max-page-size=16384"
+              )
+          endif()
+          VOICE811_CMAKE
+
+          cat > native/whisper811.cpp <<'VOICE811_CPP'
+          #include "whisper.h"
+
+          #include <algorithm>
+          #include <atomic>
+          #include <cctype>
+          #include <cstdlib>
+          #include <cstring>
+          #include <memory>
+          #include <mutex>
+          #include <stdexcept>
+          #include <string>
+
+          #define WHISPER811_API extern "C" __attribute__((visibility("default")))
+
+          namespace {
+          thread_local std::string last_error;
+          std::once_flag log_once;
+
+          constexpr int SAMPLE_RATE = 16000;
+          constexpr int MAX_AUDIO_SECONDS = 45;
+
+          struct Engine {
+              whisper_context * ctx = nullptr;
+              int threads = 4;
+              std::atomic<bool> cancelled{false};
+              std::mutex mutex;
+
+              ~Engine() {
+                  if (ctx) {
+                      whisper_free(ctx);
+                  }
+              }
+          };
+
+          void quiet_log(
+              enum ggml_log_level,
+              const char *,
+              void *
+          ) {
+              // Do not print transcriptions or model internals to Android logs.
+          }
+
+          bool should_abort(void * data) {
+              auto * engine = static_cast<Engine *>(data);
+              return engine
+                  && engine->cancelled.load(
+                      std::memory_order_relaxed
+                  );
+          }
+
+          std::string trim_copy(std::string text) {
+              auto not_space = [](unsigned char value) {
+                  return !std::isspace(value);
+              };
+
+              text.erase(
+                  text.begin(),
+                  std::find_if(
+                      text.begin(),
+                      text.end(),
+                      not_space
+                  )
+              );
+
+              text.erase(
+                  std::find_if(
+                      text.rbegin(),
+                      text.rend(),
+                      not_space
+                  ).base(),
+                  text.end()
+              );
+
+              return text;
+          }
+
+          char * duplicate_text(const std::string & text) {
+              auto * output = static_cast<char *>(
+                  std::malloc(text.size() + 1)
+              );
+
+              if (!output) {
+                  throw std::bad_alloc();
+              }
+
+              std::memcpy(
+                  output,
+                  text.data(),
+                  text.size()
+              );
+              output[text.size()] = '\0';
+
+              return output;
+          }
+          }
+
+          WHISPER811_API int whisper811_abi_version() {
+              return 1;
+          }
+
+          WHISPER811_API int whisper811_sample_rate() {
+              return SAMPLE_RATE;
+          }
+
+          WHISPER811_API const char * whisper811_last_error() {
+              return last_error.c_str();
+          }
+
+          WHISPER811_API void whisper811_free_text(void * text) {
+              std::free(text);
+          }
+
+          WHISPER811_API void * whisper811_load(
+              const char * model_path,
+              int threads
+          ) {
+              last_error.clear();
+
+              try {
+                  if (!model_path || !*model_path) {
+                      throw std::runtime_error(
+                          "Whisper model path is missing"
+                      );
+                  }
+
+                  if (threads < 1 || threads > 4) {
+                      throw std::runtime_error(
+                          "Threads must be between 1 and 4"
+                      );
+                  }
+
+                  std::call_once(
+                      log_once,
+                      [] {
+                          whisper_log_set(
+                              quiet_log,
+                              nullptr
+                          );
+                      }
+                  );
+
+                  auto engine = std::make_unique<Engine>();
+                  engine->threads = threads;
+
+                  auto context_params =
+                      whisper_context_default_params();
+
+                  context_params.use_gpu = false;
+                  context_params.flash_attn = false;
+                  context_params.dtw_token_timestamps = false;
+
+                  engine->ctx =
+                      whisper_init_from_file_with_params(
+                          model_path,
+                          context_params
+                      );
+
+                  if (!engine->ctx) {
+                      throw std::runtime_error(
+                          "Whisper model load failed"
+                      );
+                  }
+
+                  if (!whisper_is_multilingual(engine->ctx)) {
+                      throw std::runtime_error(
+                          "Select a multilingual Whisper model, not an .en model"
+                      );
+                  }
+
+                  return engine.release();
+
+              } catch (const std::exception & error) {
+                  last_error = error.what();
+
+              } catch (...) {
+                  last_error =
+                      "Unknown native Whisper load error";
+              }
+
+              return nullptr;
+          }
+
+          // Status:
+          // 0 = success
+          // 1 = error
+          // 2 = cancelled
+          // 3 = no speech / empty transcription
+          WHISPER811_API int whisper811_transcribe(
+              void * handle,
+              const float * pcm16k_mono,
+              int sample_count,
+              const char * language,
+              const char * initial_prompt,
+              char ** output_utf8
+          ) {
+              last_error.clear();
+
+              if (output_utf8) {
+                  *output_utf8 = nullptr;
+              }
+
+              if (
+                  !handle
+                  || !pcm16k_mono
+                  || !output_utf8
+                  || sample_count <= 0
+              ) {
+                  last_error =
+                      "Invalid handle, PCM buffer, or output pointer";
+                  return 1;
+              }
+
+              if (
+                  sample_count
+                  > SAMPLE_RATE * MAX_AUDIO_SECONDS
+              ) {
+                  last_error =
+                      "Audio is longer than 45 seconds";
+                  return 1;
+              }
+
+              try {
+                  auto & engine =
+                      *static_cast<Engine *>(handle);
+
+                  std::lock_guard<std::mutex> guard(
+                      engine.mutex
+                  );
+
+                  engine.cancelled.store(
+                      false,
+                      std::memory_order_relaxed
+                  );
+
+                  auto params =
+                      whisper_full_default_params(
+                          WHISPER_SAMPLING_GREEDY
+                      );
+
+                  params.n_threads = engine.threads;
+                  params.translate = false;
+                  params.no_context = true;
+                  params.no_timestamps = true;
+                  params.single_segment = false;
+
+                  params.print_special = false;
+                  params.print_progress = false;
+                  params.print_realtime = false;
+                  params.print_timestamps = false;
+
+                  params.token_timestamps = false;
+                  params.tdrz_enable = false;
+
+                  params.language =
+                      (
+                          language
+                          && *language
+                      )
+                      ? language
+                      : "ar";
+
+                  params.detect_language = false;
+
+                  params.suppress_blank = true;
+                  params.suppress_nst = true;
+
+                  params.greedy.best_of = 1;
+                  params.temperature = 0.0f;
+
+                  if (
+                      initial_prompt
+                      && *initial_prompt
+                  ) {
+                      params.initial_prompt =
+                          initial_prompt;
+                  }
+
+                  params.abort_callback =
+                      should_abort;
+                  params.abort_callback_user_data =
+                      &engine;
+
+                  const int result = whisper_full(
+                      engine.ctx,
+                      params,
+                      pcm16k_mono,
+                      sample_count
+                  );
+
+                  if (
+                      engine.cancelled.load(
+                          std::memory_order_relaxed
+                      )
+                  ) {
+                      last_error = "Cancelled";
+                      return 2;
+                  }
+
+                  if (result != 0) {
+                      throw std::runtime_error(
+                          "Whisper transcription failed"
+                      );
+                  }
+
+                  const int segment_count =
+                      whisper_full_n_segments(
+                          engine.ctx
+                      );
+
+                  std::string text;
+
+                  for (
+                      int index = 0;
+                      index < segment_count;
+                      ++index
+                  ) {
+                      const char * segment =
+                          whisper_full_get_segment_text(
+                              engine.ctx,
+                              index
+                          );
+
+                      if (!segment) {
+                          continue;
+                      }
+
+                      std::string cleaned =
+                          trim_copy(segment);
+
+                      if (cleaned.empty()) {
+                          continue;
+                      }
+
+                      if (!text.empty()) {
+                          text += " ";
+                      }
+
+                      text += cleaned;
+                  }
+
+                  text = trim_copy(text);
+
+                  if (text.empty()) {
+                      last_error = "No speech detected";
+                      return 3;
+                  }
+
+                  *output_utf8 =
+                      duplicate_text(text);
+
+                  return 0;
+
+              } catch (const std::exception & error) {
+                  last_error = error.what();
+
+              } catch (...) {
+                  last_error =
+                      "Unknown native Whisper transcription error";
+              }
+
+              return 1;
+          }
+
+          WHISPER811_API void whisper811_cancel(
+              void * handle
+          ) {
+              if (!handle) {
+                  return;
+              }
+
+              static_cast<Engine *>(handle)
+                  ->cancelled.store(
+                      true,
+                      std::memory_order_relaxed
+                  );
+          }
+
+          WHISPER811_API void whisper811_destroy(
+              void * handle
+          ) {
+              delete static_cast<Engine *>(handle);
+          }
+          VOICE811_CPP
+
+      - name: Build Android arm64 library
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WHISPER_NDK_DIR="$ANDROID_HOME/ndk/$NDK_VERSION"
+
+          test -f \
+            "$WHISPER_NDK_DIR/build/cmake/android.toolchain.cmake"
+
+          cmake \
+            -S native \
+            -B native-build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$WHISPER_NDK_DIR/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_static \
+            -DWHISPER_SOURCE_DIR="$GITHUB_WORKSPACE/whisper-source"
+
+          cmake \
+            --build native-build \
+            --target whisper811 \
+            --parallel 2
+
+          mkdir -p \
+            dist/Voice811-Whisper-Engine/libs/arm64-v8a
+
+          cp \
+            native-build/libwhisper811.so \
+            dist/Voice811-Whisper-Engine/libs/arm64-v8a/
+
+          "$WHISPER_NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+            --strip-unneeded \
+            dist/Voice811-Whisper-Engine/libs/arm64-v8a/libwhisper811.so
+
+      - name: Include source and integration contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p \
+            dist/Voice811-Whisper-Engine/source
+
+          cp \
+            native/whisper811.cpp \
+            native/CMakeLists.txt \
+            dist/Voice811-Whisper-Engine/source/
+
+          cp \
+            whisper-source/LICENSE \
+            dist/Voice811-Whisper-Engine/WHISPER-LICENSE.txt
+
+          cat > \
+            dist/Voice811-Whisper-Engine/INTEGRATION.txt \
+            <<'VOICE811_CONTRACT'
+          Voice Assistant 811 - Offline Whisper speech engine
+
+          This bundle is NOT an APK and contains NO speech model.
+
+          Purpose:
+            Offline Arabic speech-to-text for Local Qwen mode.
+
+          Runtime:
+            Android microphone
+            -> 16 kHz mono PCM float32
+            -> libwhisper811.so
+            -> multilingual Whisper model on the phone
+            -> Arabic text
+            -> Local Qwen
+            -> Android Native TTS
+
+          Target:
+            arm64-v8a
+            Android API 28+
+            in-process CPU inference
+            no HTTP
+            no browser
+            no Termux
+            no cloud speech recognition
+
+          C ABI v1:
+            int whisper811_abi_version(void);
+            int whisper811_sample_rate(void);
+            const char *whisper811_last_error(void);
+            void *whisper811_load(
+                const char *model_path_utf8,
+                int n_threads
+            );
+            int whisper811_transcribe(
+                void *handle,
+                const float *pcm16k_mono,
+                int sample_count,
+                const char *language_utf8,
+                const char *initial_prompt_utf8,
+                char **output_utf8
+            );
+            void whisper811_free_text(void *output_utf8);
+            void whisper811_cancel(void *handle);
+            void whisper811_destroy(void *handle);
+
+          whisper811_transcribe status:
+            0 success
+            1 error
+            2 cancelled
+            3 no speech / empty transcription
+
+          Initial model choice:
+            multilingual Whisper base
+            file name: ggml-base.bin
+            approximate size: 142 MiB
+
+          Do NOT use:
+            ggml-base.en.bin
+          because .en models cannot transcribe Arabic.
+
+          The model will be downloaded once by the user and selected from
+          Android storage, then imported to app-private storage similarly
+          to the existing Local Qwen GGUF flow.
+
+          The native engine expects 16 kHz mono float32 PCM audio.
+          Microphone capture and Python ctypes integration are the next stage.
+          VOICE811_CONTRACT
+
+      - name: Verify native binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'VOICE811_VERIFY'
+          import hashlib
+          import json
+          import re
+          import struct
+          import subprocess
+          from pathlib import Path
+
+          out = Path(
+              "dist/Voice811-Whisper-Engine"
+          )
+
+          lib = (
+              out
+              / "libs/arm64-v8a/libwhisper811.so"
+          )
+
+          data = lib.read_bytes()
+
+          assert data[:4] == b"\x7fELF"
+          assert data[4] == 2
+          assert data[5] == 1
+
+          machine = struct.unpack_from(
+              "<H",
+              data,
+              18
+          )[0]
+
+          assert machine == 183, (
+              "Expected AArch64 ELF"
+          )
+
+          dynamic = subprocess.check_output(
+              [
+                  "readelf",
+                  "-d",
+                  str(lib)
+              ],
+              text=True
+          )
+
+          needed = re.findall(
+              r"\(NEEDED\).*?\[(.*?)\]",
+              dynamic
+          )
+
+          allowed = {
+              "libc.so",
+              "libm.so",
+              "libdl.so",
+              "liblog.so",
+              "libandroid.so"
+          }
+
+          unexpected = (
+              set(needed)
+              - allowed
+          )
+
+          assert not unexpected, (
+              "Unexpected shared dependencies: "
+              + repr(needed)
+          )
+
+          symbols = subprocess.check_output(
+              [
+                  "nm",
+                  "-D",
+                  "--defined-only",
+                  str(lib)
+              ],
+              text=True
+          )
+
+          expected = [
+              "whisper811_abi_version",
+              "whisper811_sample_rate",
+              "whisper811_last_error",
+              "whisper811_load",
+              "whisper811_transcribe",
+              "whisper811_free_text",
+              "whisper811_cancel",
+              "whisper811_destroy"
+          ]
+
+          for symbol in expected:
+              assert re.search(
+                  r"\b"
+                  + symbol
+                  + r"$",
+                  symbols,
+                  re.MULTILINE
+              ), symbol
+
+          headers = subprocess.check_output(
+              [
+                  "readelf",
+                  "-lW",
+                  str(lib)
+              ],
+              text=True
+          )
+
+          alignments = [
+              int(
+                  line.split()[-1],
+                  16
+              )
+              for line in headers.splitlines()
+              if line.strip().startswith(
+                  "LOAD "
+              )
+          ]
+
+          assert alignments
+          assert min(alignments) >= 16384
+
+          models = (
+              list(out.rglob("*.bin"))
+              + list(out.rglob("*.gguf"))
+          )
+
+          assert not models, (
+              "Speech model must not be in engine artifact"
+          )
+
+          manifest = {
+              "project": "Voice Assistant 811",
+              "engine": "Offline Whisper STT",
+              "whisper_cpp_commit":
+                  "52a939a2a762224e255d366c1182b2af4dd1a032",
+              "abi": "arm64-v8a",
+              "minimum_android_api": 28,
+              "c_abi_version": 1,
+              "sample_rate": 16000,
+              "audio": "mono float32 PCM",
+              "language": "Arabic / multilingual",
+              "recommended_model": "ggml-base.bin",
+              "model_included": False,
+              "runtime_http": False,
+              "runtime": "in-process CPU",
+              "shared_dependencies": needed,
+              "exports": expected,
+              "library_sha256":
+                  hashlib.sha256(data).hexdigest()
+          }
+
+          (
+              out
+              / "engine-manifest.json"
+          ).write_text(
+              json.dumps(
+                  manifest,
+                  indent=2
+              )
+              + "\n",
+              encoding="utf-8"
+          )
+
+          (
+              out
+              / "SHA256SUMS"
+          ).write_text(
+              manifest["library_sha256"]
+              + "  libs/arm64-v8a/libwhisper811.so\n",
+              encoding="utf-8"
+          )
+
+          print(
+              json.dumps(
+                  manifest,
+                  indent=2
+              )
+          )
+          VOICE811_VERIFY
+
+      - name: Upload engine artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Voice811-Whisper-Engine-arm64
+          path: dist/Voice811-Whisper-Engine/
+          if-no-files-found: error
+          retention-days: 30
