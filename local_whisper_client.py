@@ -134,15 +134,9 @@ class LocalWhisperClient:
                 repr(exc)
             )
 
-        saved_path = self._load_saved_model_path()
-
-        if (
-            saved_path
-            and os.path.isfile(saved_path)
-            and not self._loading
-            and not self.is_available()
-        ):
-            self._start_private_path_load(saved_path)
+        # Keep startup light. A previously selected Whisper model is restored
+        # lazily on the first Local Qwen voice turn instead of consuming RAM
+        # while the user is using Gemini or Groq.
 
     def ensure_model_or_pick(self):
         """
@@ -787,10 +781,7 @@ class LocalWhisperClient:
         started_at = time.monotonic()
 
         try:
-            from jnius import (
-                autoclass,
-                jarray
-            )
+            from jnius import autoclass
 
             AudioRecord = autoclass(
                 "android.media.AudioRecord"
@@ -848,10 +839,12 @@ class LocalWhisperClient:
                     "Android AudioRecord initialization failed"
                 )
 
-            ShortArray = jarray("h")
-            short_buffer = ShortArray(
-                [0] * buffer_samples
-            )
+            # PyJNIus accepts normal Python lists for primitive Java arrays.
+            # AudioRecord.read(short[], ...) updates the list in place because
+            # PyJNIus passes arrays by reference by default.
+            short_buffer = [
+                0
+            ] * buffer_samples
 
             self._audio_record = record
             self._recording = True
@@ -881,7 +874,8 @@ class LocalWhisperClient:
                     record.read(
                         short_buffer,
                         0,
-                        buffer_samples
+                        buffer_samples,
+                        pass_by_reference=True
                     )
                 )
 

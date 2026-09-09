@@ -7,6 +7,8 @@ import time
 from kivy.clock import Clock
 from kivy.utils import platform
 
+from local_whisper_client import LocalWhisperClient
+
 
 class LocalQwenClient:
     """
@@ -71,10 +73,28 @@ class LocalQwenClient:
 
         self._provider_watch_event = None
 
+        # Local Qwen owns the fully-offline speech path. Gemini/Groq keep the
+        # existing Android SpeechRecognizer path untouched.
+        self.local_whisper_engine = LocalWhisperClient()
+        self._offline_voice_generation = 0
+        self._offline_voice_router_installed = False
+        self._offline_voice_router_attempts = 0
+        self._offline_voice_app = None
+        self._online_start_listening = None
+        self._online_stop_listening = None
+        self._online_cancel_listening = None
+
         if platform == "android":
             Clock.schedule_once(
                 lambda dt: self._initialize_android_picker(),
                 0.80
+            )
+
+            # Install after VoiceAssistantApp.build() creates the UI and its
+            # stable online speech methods.
+            Clock.schedule_once(
+                self._install_offline_voice_router,
+                2.60
             )
 
     # =====================================================
@@ -108,6 +128,510 @@ class LocalQwenClient:
     def get_model_name(self):
         return self._model_name or os.path.basename(
             self.model_path or ""
+        )
+
+    # =====================================================
+    # OFFLINE VOICE ROUTER
+    # =====================================================
+
+    def _install_offline_voice_router(self, dt=0):
+        """
+        Route only Local Qwen voice input through Local Whisper.
+
+        Gemini and Groq continue using the original Android SpeechRecognizer.
+        This keeps the already-tested online path unchanged.
+        """
+        if platform != "android":
+            return
+
+        if self._offline_voice_router_installed:
+            return
+
+        try:
+            from kivy.app import App
+            from types import MethodType
+
+            app = App.get_running_app()
+
+            required = (
+                "start_listening",
+                "stop_listening",
+                "cancel_listening",
+                "set_state",
+                "_has_record_audio_permission",
+                "_request_record_audio_permission",
+            )
+
+            if (
+                app is None
+                or any(
+                    not hasattr(app, name)
+                    for name in required
+                )
+                or not hasattr(app, "speak_btn")
+            ):
+                self._offline_voice_router_attempts += 1
+
+                if self._offline_voice_router_attempts <= 12:
+                    Clock.schedule_once(
+                        self._install_offline_voice_router,
+                        0.50
+                    )
+                else:
+                    print(
+                        "811: Offline voice router install timed out"
+                    )
+
+                return
+
+            self._offline_voice_app = app
+            self._online_start_listening = (
+                app.start_listening
+            )
+            self._online_stop_listening = (
+                app.stop_listening
+            )
+            self._online_cancel_listening = (
+                app.cancel_listening
+            )
+
+            owner = self
+
+            def routed_start_listening(app_self):
+                if (
+                    getattr(
+                        app_self,
+                        "ai_provider_choice",
+                        ""
+                    )
+                    != "local_qwen"
+                ):
+                    return (
+                        owner
+                        ._online_start_listening()
+                    )
+
+                return owner._start_offline_listening(
+                    app_self
+                )
+
+            def routed_stop_listening(app_self):
+                if (
+                    getattr(
+                        app_self,
+                        "ai_provider_choice",
+                        ""
+                    )
+                    != "local_qwen"
+                ):
+                    return (
+                        owner
+                        ._online_stop_listening()
+                    )
+
+                return owner._stop_offline_listening(
+                    app_self
+                )
+
+            def routed_cancel_listening(app_self):
+                if (
+                    getattr(
+                        app_self,
+                        "ai_provider_choice",
+                        ""
+                    )
+                    != "local_qwen"
+                ):
+                    return (
+                        owner
+                        ._online_cancel_listening()
+                    )
+
+                return owner._cancel_offline_listening(
+                    app_self
+                )
+
+            app.start_listening = MethodType(
+                routed_start_listening,
+                app
+            )
+            app.stop_listening = MethodType(
+                routed_stop_listening,
+                app
+            )
+            app.cancel_listening = MethodType(
+                routed_cancel_listening,
+                app
+            )
+
+            self._offline_voice_router_installed = True
+            self._offline_voice_router_attempts = 0
+
+            print(
+                "811: Offline voice router READY | "
+                "Local Qwen -> Local Whisper"
+            )
+
+        except Exception as exc:
+            self._offline_voice_router_attempts += 1
+
+            print(
+                "811: Offline voice router install error:",
+                repr(exc)
+            )
+
+            if self._offline_voice_router_attempts <= 12:
+                Clock.schedule_once(
+                    self._install_offline_voice_router,
+                    0.75
+                )
+
+    def _restore_offline_voice_router(self):
+        if not self._offline_voice_router_installed:
+            return
+
+        app = self._offline_voice_app
+
+        try:
+            if app is not None:
+                if self._online_start_listening is not None:
+                    app.start_listening = (
+                        self._online_start_listening
+                    )
+
+                if self._online_stop_listening is not None:
+                    app.stop_listening = (
+                        self._online_stop_listening
+                    )
+
+                if self._online_cancel_listening is not None:
+                    app.cancel_listening = (
+                        self._online_cancel_listening
+                    )
+
+        except Exception as exc:
+            print(
+                "811: Offline voice router restore warning:",
+                repr(exc)
+            )
+
+        self._offline_voice_router_installed = False
+        self._offline_voice_app = None
+        self._online_start_listening = None
+        self._online_stop_listening = None
+        self._online_cancel_listening = None
+
+    def _start_offline_listening(self, app):
+        if platform != "android":
+            app.set_state(
+                "error",
+                "الاستماع المحلي متاح على Android فقط."
+            )
+            return False
+
+        if getattr(app, "processing", False):
+            return False
+
+        if getattr(app, "is_listening", False):
+            return False
+
+        if not app._has_record_audio_permission():
+            app._request_record_audio_permission()
+
+            if hasattr(app, "_disable_handsfree"):
+                app._disable_handsfree()
+
+            app.set_state(
+                "error",
+                (
+                    "صلاحية الميكروفون غير مفعلة.\n"
+                    "وافق على RECORD_AUDIO ثم اضغط للتحدث مرة أخرى."
+                )
+            )
+            return False
+
+        # Never open the Whisper picker on top of the Qwen picker. Qwen must
+        # be ready first, then the first local voice turn asks for Whisper.
+        if not self.is_available():
+            if hasattr(app, "_disable_handsfree"):
+                app._disable_handsfree()
+
+            app.is_listening = False
+            app.processing = False
+            app.speak_btn.disabled = False
+
+            if self.is_loading():
+                app.set_state(
+                    "thinking"
+                )
+            else:
+                if not self._picker_open:
+                    self.request_model_picker()
+
+                app.set_state(
+                    "ready"
+                )
+
+            return False
+
+        if not self.local_whisper_engine.ensure_model_or_pick():
+            if hasattr(app, "_disable_handsfree"):
+                app._disable_handsfree()
+
+            app.is_listening = False
+            app.processing = False
+            app.speak_btn.disabled = False
+            return False
+
+        try:
+            if hasattr(
+                app,
+                "_set_background_wake_capture"
+            ):
+                app._set_background_wake_capture(
+                    False,
+                    "local_whisper_foreground"
+                )
+        except Exception:
+            pass
+
+        self._offline_voice_generation += 1
+        generation = self._offline_voice_generation
+
+        app._active_user_row = None
+        app.is_listening = True
+        app.processing = False
+        app.speak_btn.disabled = False
+
+        app.set_state(
+            "listening"
+        )
+
+        ok = self.local_whisper_engine.listen_once(
+            on_level=(
+                lambda level:
+                self._offline_voice_level(
+                    app,
+                    generation,
+                    level
+                )
+            ),
+            on_thinking=(
+                lambda:
+                self._offline_voice_thinking(
+                    app,
+                    generation
+                )
+            ),
+            on_result=(
+                lambda text:
+                self._offline_voice_result(
+                    app,
+                    generation,
+                    text
+                )
+            ),
+            on_error=(
+                lambda message:
+                self._offline_voice_error(
+                    app,
+                    generation,
+                    message
+                )
+            )
+        )
+
+        if not ok:
+            app.is_listening = False
+            app.processing = False
+            app.speak_btn.disabled = False
+
+            if hasattr(app, "_disable_handsfree"):
+                app._disable_handsfree()
+
+            return False
+
+        print(
+            "811: Local Whisper microphone STARTED"
+        )
+
+        return True
+
+    def _stop_offline_listening(self, app):
+        """
+        Manual stop finishes the current recording and transcribes it.
+        """
+        try:
+            if self.local_whisper_engine.is_recording():
+                self.local_whisper_engine.stop_listening()
+                return True
+
+            if self.local_whisper_engine.is_transcribing():
+                return True
+
+        except Exception as exc:
+            print(
+                "811: Local Whisper stop error:",
+                repr(exc)
+            )
+
+        app.is_listening = False
+
+        if not getattr(app, "processing", False):
+            app.set_state(
+                "ready"
+            )
+
+        return True
+
+    def _cancel_offline_listening(self, app):
+        """
+        Clear/cancel discards capture or transcription immediately.
+        """
+        self._offline_voice_generation += 1
+
+        try:
+            self.local_whisper_engine.cancel_listening()
+        except Exception as exc:
+            print(
+                "811: Local Whisper cancel error:",
+                repr(exc)
+            )
+
+        app.is_listening = False
+        app.processing = False
+        app.speak_btn.disabled = False
+
+        try:
+            app.status_orb.set_voice_level(
+                0.0
+            )
+        except Exception:
+            pass
+
+        return True
+
+    def _offline_voice_level(
+        self,
+        app,
+        generation,
+        level
+    ):
+        if generation != self._offline_voice_generation:
+            return
+
+        if not getattr(app, "is_listening", False):
+            return
+
+        try:
+            app.status_orb.set_voice_level(
+                level
+            )
+        except Exception:
+            pass
+
+    def _offline_voice_thinking(
+        self,
+        app,
+        generation
+    ):
+        if generation != self._offline_voice_generation:
+            return
+
+        # Keep is_listening True until transcription finishes so Clear can
+        # still cancel native Whisper while it is decoding.
+        app.is_listening = True
+        app.processing = True
+        app.speak_btn.disabled = True
+
+        try:
+            app.status_orb.set_voice_level(
+                0.0
+            )
+        except Exception:
+            pass
+
+        app.set_state(
+            "thinking"
+        )
+
+        print(
+            "811: Local Whisper TRANSCRIBING"
+        )
+
+    def _offline_voice_result(
+        self,
+        app,
+        generation,
+        text
+    ):
+        if generation != self._offline_voice_generation:
+            return
+
+        app.is_listening = False
+
+        # Keep the UI locked until the existing main.py result handler takes
+        # over and launches Local Qwen.
+        app.processing = True
+        app.speak_btn.disabled = True
+
+        text = str(
+            text or ""
+        ).strip()
+
+        print(
+            "811: Local Whisper result received | chars:",
+            len(text)
+        )
+
+        # Reuse the already-tested common result/AI/TTS path in main.py.
+        app.on_speech_results_text(
+            text
+        )
+
+    def _offline_voice_error(
+        self,
+        app,
+        generation,
+        message
+    ):
+        if generation != self._offline_voice_generation:
+            return
+
+        app.is_listening = False
+        app.processing = False
+        app.speak_btn.disabled = False
+
+        if hasattr(app, "_disable_handsfree"):
+            app._disable_handsfree()
+
+        try:
+            app.status_orb.set_voice_level(
+                0.0
+            )
+        except Exception:
+            pass
+
+        message = str(
+            message
+            or "تعذر التعرف على الكلام محلياً."
+        ).strip()
+
+        app.set_state(
+            "error",
+            message
+        )
+
+        if hasattr(app, "_return_to_ready"):
+            Clock.schedule_once(
+                lambda dt:
+                app._return_to_ready(),
+                2.5
+            )
+
+        print(
+            "811: Local Whisper error:",
+            message
         )
 
     # =====================================================
@@ -1269,6 +1793,17 @@ class LocalQwenClient:
             self.history = []
 
     def close(self):
+        self._restore_offline_voice_router()
+
+        try:
+            if self.local_whisper_engine is not None:
+                self.local_whisper_engine.close()
+        except Exception as exc:
+            print(
+                "811: Local Whisper close warning:",
+                repr(exc)
+            )
+
         self.unload_model()
 
         if self._provider_watch_event is not None:
