@@ -20,7 +20,7 @@ android.permissions = RECORD_AUDIO,INTERNET,ACCESS_NETWORK_STATE,MODIFY_AUDIO_SE
 
 android.archs = arm64-v8a
 
-android.add_libs_arm64_v8a = libs/arm64-v8a/libqwen811.so
+android.add_libs_arm64_v8a = libs/arm64-v8a/libqwen811.so,libs/arm64-v8a/libwhisper811.so
 
 orientation = portrait
 
