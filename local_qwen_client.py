@@ -31,14 +31,16 @@ class LocalQwenClient:
 
     SYSTEM_PROMPT = (
         "أنت 811، مساعد شخصي ذكي باللغة العربية. "
-        "أجب بوضوح ودقة وبأسلوب طبيعي ومختصر ما لم يطلب المستخدم التفصيل. "
-        "لا تخترع معلومات أو هوية أو شركة أو مطوراً غير معروف. "
-        "لا تعرض التفكير الداخلي أو وسوم <think> في الرد."
+        "أجب مباشرة وباختصار، غالباً بجملة أو جملتين، "
+        "ولا تفصل إلا إذا طلب المستخدم ذلك. "
+        "لا تخترع معلومات، ولا تعرض التفكير الداخلي."
     )
 
-    CONTEXT_SIZE = 2048
+    # Fast phone profile: enough context for normal voice follow-ups while
+    # reducing recurrent-state allocation and prompt-prefill work.
+    CONTEXT_SIZE = 1024
     THREADS = 4
-    MAX_TOKENS = 256
+    MAX_TOKENS = 96
     ABI_VERSION = 1
 
     PICK_MODEL_REQUEST_CODE = 8113
@@ -1986,8 +1988,11 @@ class LocalQwenClient:
                 ]
             )
 
+            # The native Qwen3.5 engine re-prefills history on every turn.
+            # Keep only the immediately previous exchange so response latency
+            # stays bounded instead of increasing as the chat grows.
             self._trim_history_turns(
-                max_turns=6
+                max_turns=1
             )
 
             return response
@@ -2215,7 +2220,7 @@ class LocalQwenClient:
         user_text
     ):
         history = list(
-            self.history
+            self.history[-2:]
         )
 
         while True:
